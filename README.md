@@ -1,3 +1,4 @@
+# School ERP
 
 # School ERP System Documentation
 
@@ -470,9 +471,13 @@ Benefits:
 The School ERP System provides a comprehensive solution for managing educational institutions digitally. It improves operational efficiency, enhances communication, ensures data security, and supports academic excellence through automation and centralized management.
 
 
-  ## Running the code
+## Run the frontend
 
-  Run `npm i` to install the dependencies.
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
   Run `npm run dev` to start the development server.
   

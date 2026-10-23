@@ -1,0 +1,49 @@
+{
+  "name": "school-erp-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "School ERP REST API — Node.js, Express, Prisma, MS SQL Server",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:db": "tsx scripts/test-db.ts",
+    "test:procurement": "tsx scripts/test-procurement.ts",
+    "prisma:generate": "prisma generate",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "import:frontend": "tsx scripts/import-frontend-demo.ts",
+    "test:academics": "tsx scripts/test-academics.ts",
+    "test:finance": "tsx scripts/test-finance.ts",
+    "test:communication": "tsx scripts/test-communication.ts",
+    "test:website": "tsx scripts/test-website.ts",
+    "test:facilities": "tsx scripts/test-facilities.ts",
+    "seed:procurement": "tsx scripts/seed-procurement-demo.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "bcryptjs": "3.0.2",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.5",
+    "dotenv": "16.4.7",
+    "express": "5.1.0",
+    "express-rate-limit": "7.5.0",
+    "helmet": "8.1.0",
+    "jsonwebtoken": "9.0.2",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "1.4.8",
+    "@types/cors": "2.8.17",
+    "@types/express": "5.0.1",
+    "@types/jsonwebtoken": "9.0.9",
+    "@types/node": "22.15.3",
+    "prisma": "5.22.0",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3"
+  }
+}

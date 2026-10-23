@@ -1,0 +1,1448 @@
+// School ERP — database schema (draft v1)
+// Database: Microsoft SQL Server · ORM: Prisma
+//
+// Conventions
+// - Every tenant-owned table carries `organizationId` (used by SQL Server Row-Level Security)
+//   and, when it belongs to one campus, `branchId`.
+// - Ids are GUIDs (UNIQUEIDENTIFIER) so they cannot be guessed across schools.
+// - Prisma does not support enums / Json / lists on SQL Server: status-like fields are
+//   NVARCHAR with the allowed values listed in a comment; JSON is stored as NVARCHAR(MAX).
+// - Relations use onDelete/onUpdate NoAction (SQL Server rejects multiple cascade paths);
+//   records are deactivated (`isActive`, `status`) instead of deleted.
+// - Money is DECIMAL(12,2) in rupees.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PLATFORM (owned by us, the software company)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Plan {
+  id             String         @id @default(uuid()) @db.UniqueIdentifier
+  code           String         @unique @db.NVarChar(40) // basic | pro | enterprise
+  name           String         @db.NVarChar(100)
+  pricePerBranch Decimal        @db.Decimal(12, 2) // per branch per month
+  maxStudents    Int? // null = unlimited
+  features       String         @db.NVarChar(Max) // JSON list of enabled modules
+  isActive       Boolean        @default(true)
+  organizations  Organization[]
+  subscriptions  Subscription[]
+}
+
+model Organization {
+  id           String    @id @default(uuid()) @db.UniqueIdentifier
+  name         String    @db.NVarChar(200) // e.g. DAV College Managing Committee
+  subdomain    String    @unique @db.NVarChar(60) // dav → dav.schoolerp.in
+  logoUrl      String?   @db.NVarChar(500)
+  contactEmail String    @db.NVarChar(200)
+  contactPhone String    @db.NVarChar(20)
+  planId       String    @db.UniqueIdentifier
+  status       String    @default("TRIAL") @db.NVarChar(20) // TRIAL | ACTIVE | SUSPENDED | CANCELLED
+  trialEndsAt  DateTime?
+  settings     String?   @db.NVarChar(Max) // JSON: grading scale, late-fee rule, branch override policy…
+  createdAt    DateTime  @default(now())
+
+  plan          Plan           @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  regions       Region[]
+  branches      Branch[]
+  users         User[]
+  roles         Role[]
+  academicYears AcademicYear[]
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId     String   @db.UniqueIdentifier
+  planId             String   @db.UniqueIdentifier
+  branchCount        Int
+  amount             Decimal  @db.Decimal(12, 2) // per billing period
+  billingCycle       String   @db.NVarChar(10) // MONTHLY | YEARLY
+  status             String   @db.NVarChar(20) // ACTIVE | PAST_DUE | CANCELLED
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  gatewayRef         String?  @db.NVarChar(100) // Razorpay subscription id
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  plan         Plan                  @relation(fields: [planId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoices     SubscriptionInvoice[]
+
+  @@index([organizationId])
+}
+
+model SubscriptionInvoice {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  subscriptionId String    @db.UniqueIdentifier
+  number         String    @unique @db.NVarChar(40)
+  amount         Decimal   @db.Decimal(12, 2)
+  gst            Decimal   @db.Decimal(12, 2)
+  status         String    @db.NVarChar(20) // DUE | PAID | VOID
+  issuedAt       DateTime  @default(now())
+  paidAt         DateTime?
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ORGANIZATION STRUCTURE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Region {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  name           String @db.NVarChar(100) // Jharkhand, Delhi NCR…
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branches     Branch[]
+
+  @@unique([organizationId, name])
+}
+
+model Branch {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  regionId       String? @db.UniqueIdentifier
+  code           String  @db.NVarChar(20) // DAV-RNC
+  name           String  @db.NVarChar(200) // DAV Public School, Ranchi
+  board          String? @db.NVarChar(40) // CBSE | ICSE | STATE
+  affiliationNo  String? @db.NVarChar(40)
+  address        String  @db.NVarChar(500)
+  city           String  @db.NVarChar(100)
+  state          String  @db.NVarChar(100)
+  phone          String? @db.NVarChar(20)
+  email          String? @db.NVarChar(200)
+  settings       String? @db.NVarChar(Max) // JSON overrides of organization settings
+  isActive       Boolean @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  region       Region?      @relation(fields: [regionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  grades       Grade[]
+  memberships  Membership[]
+
+  @@unique([organizationId, code])
+}
+
+model AcademicYear {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  name           String   @db.NVarChar(20) // 2025-26
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  isCurrent      Boolean  @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  enrollments  Enrollment[]
+
+  @@unique([organizationId, name])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// IDENTITY & ACCESS
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Anyone who can sign in: staff, students, parents, group officials.
+model User {
+  id                 String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId     String    @db.UniqueIdentifier
+  username           String    @db.NVarChar(80) // employee id, admission no, phone…
+  name               String    @db.NVarChar(150)
+  email              String?   @db.NVarChar(200)
+  phone              String?   @db.NVarChar(20)
+  passwordHash       String    @db.NVarChar(200) // argon2 / bcrypt
+  mustChangePassword Boolean   @default(true)
+  isActive           Boolean   @default(true) // admin can disable
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  memberships    Membership[]
+  refreshTokens  RefreshToken[]
+  passwordResets PasswordResetToken[]
+
+  @@unique([organizationId, username])
+  @@index([organizationId, phone])
+}
+
+/// System roles (organizationId null) + custom roles an organization creates.
+model Role {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String? @db.UniqueIdentifier
+  code           String  @db.NVarChar(40) // GROUP_ADMIN, PRINCIPAL, TEACHER, PARENT, …
+  name           String  @db.NVarChar(100)
+  level          String  @db.NVarChar(10) // ORG | REGION | BRANCH | SELF
+  isSystem       Boolean @default(false)
+
+  organization Organization?    @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  permissions  RolePermission[]
+  memberships  Membership[]
+
+  @@unique([organizationId, code])
+}
+
+model Permission {
+  code        String           @id @db.NVarChar(60) // students.read, fees.collect, marks.write, …
+  module      String           @db.NVarChar(40)
+  description String           @db.NVarChar(200)
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  organizationId String? @db.UniqueIdentifier // null for system roles
+  roleId         String  @db.UniqueIdentifier
+  permissionCode String  @db.NVarChar(60)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  permission Permission @relation(fields: [permissionCode], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([roleId, permissionCode])
+}
+
+/// A user holds a role at a scope: the whole organization, a region or one branch.
+/// One user can have several memberships (e.g. teacher at two campuses).
+model Membership {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  userId         String  @db.UniqueIdentifier
+  roleId         String  @db.UniqueIdentifier
+  scopeType      String  @db.NVarChar(10) // ORG | REGION | BRANCH
+  regionId       String? @db.UniqueIdentifier
+  branchId       String? @db.UniqueIdentifier
+  isActive       Boolean @default(true)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  role   Role    @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, userId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.UniqueIdentifier
+  userId    String    @db.UniqueIdentifier
+  tokenHash String    @db.NVarChar(200)
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?   @db.NVarChar(300)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+/// One-time link for "forgot password". Only the hash of the token is stored.
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.UniqueIdentifier
+  userId    String    @db.UniqueIdentifier
+  tokenHash String    @db.NVarChar(200)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tokenHash])
+  @@index([userId])
+}
+
+/// One-time codes sent by SMS / WhatsApp, e.g. for parents signing in with their phone.
+model OtpCode {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  phone          String    @db.NVarChar(20)
+  purpose        String    @db.NVarChar(15) // LOGIN | VERIFY_PHONE
+  codeHash       String    @db.NVarChar(200)
+  attempts       Int       @default(0)
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, phone, createdAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PEOPLE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Staff {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier // home branch
+  userId         String?   @db.UniqueIdentifier // unique when set: database/filtered-unique-indexes.sql
+  employeeCode   String    @db.NVarChar(30) // T001, S004
+  name           String    @db.NVarChar(150)
+  gender         String?   @db.NVarChar(10) // MALE | FEMALE | OTHER
+  dob            DateTime? @db.Date
+  phone          String?   @db.NVarChar(20)
+  email          String?   @db.NVarChar(200)
+  staffType      String    @db.NVarChar(15) // TEACHING | NON_TEACHING
+  designation    String    @db.NVarChar(100)
+  department     String?   @db.NVarChar(100)
+  employmentType String?   @db.NVarChar(20) // PERMANENT | PROBATION | CONTRACT | PART_TIME | GUEST
+  joiningDate    DateTime? @db.Date
+  status         String    @default("ACTIVE") @db.NVarChar(15) // ACTIVE | ON_LEAVE | SUSPENDED | RESIGNED
+  basicSalary    Decimal?  @db.Decimal(12, 2)
+  allowances     String?   @db.NVarChar(Max) // JSON {hra, da, ta, other}
+  bankAccount    String?   @db.NVarChar(Max) // JSON, encrypted at application level
+  sensitive      String?   @db.NVarChar(Max) // encrypted JSON (Aadhaar, PAN)
+  profile        String?   @db.NVarChar(Max) // JSON: qualifications, experience, documents, family…
+
+  leaveRequests LeaveRequest[]
+  payslips      Payslip[]
+
+  @@unique([organizationId, employeeCode])
+  @@index([organizationId, branchId])
+}
+
+model Student {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier // current campus
+  userId         String?   @db.UniqueIdentifier // unique when set: database/filtered-unique-indexes.sql
+  admissionNo    String    @db.NVarChar(30)
+  firstName      String    @db.NVarChar(80)
+  middleName     String?   @db.NVarChar(80)
+  lastName       String?   @db.NVarChar(80)
+  gender         String?   @db.NVarChar(10) // MALE | FEMALE | OTHER
+  dob            DateTime? @db.Date
+  bloodGroup     String?   @db.NVarChar(5)
+  category       String?   @db.NVarChar(20) // GENERAL | OBC | SC | ST | EWS
+  religion       String?   @db.NVarChar(30)
+  aadhaarLast4   String?   @db.NVarChar(4) // full number kept encrypted in `sensitive`
+  admissionDate  DateTime? @db.Date
+  status         String    @default("ACTIVE") @db.NVarChar(15) // ACTIVE | TRANSFERRED | PASSED_OUT | LEFT
+  address        String?   @db.NVarChar(Max) // JSON {present, permanent}
+  health         String?   @db.NVarChar(Max) // JSON
+  previousSchool String?   @db.NVarChar(Max) // JSON
+  sensitive      String?   @db.NVarChar(Max) // encrypted JSON (Aadhaar, documents)
+  profile        String?   @db.NVarChar(Max) // JSON: nationality, activities, documents checklist, contact…
+
+  guardians   StudentGuardian[]
+  enrollments Enrollment[]
+
+  @@unique([organizationId, admissionNo])
+  @@index([organizationId, branchId])
+}
+
+model Guardian {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  userId         String? @db.UniqueIdentifier // parent login; unique when set: database/filtered-unique-indexes.sql
+  name           String  @db.NVarChar(150)
+  phone          String  @db.NVarChar(20)
+  email          String? @db.NVarChar(200)
+  occupation     String? @db.NVarChar(100)
+  annualIncome   String? @db.NVarChar(30)
+
+  students StudentGuardian[]
+
+  @@index([organizationId, phone])
+}
+
+/// Links parents to children — one parent account sees all their children, across branches.
+model StudentGuardian {
+  organizationId String  @db.UniqueIdentifier
+  studentId      String  @db.UniqueIdentifier
+  guardianId     String  @db.UniqueIdentifier
+  relation       String  @db.NVarChar(20) // FATHER | MOTHER | GUARDIAN
+  isPrimary      Boolean @default(false)
+
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([studentId, guardianId])
+}
+
+/// Which section a student is in for a given academic year (keeps history across promotions).
+model Enrollment {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  branchId       String @db.UniqueIdentifier
+  studentId      String @db.UniqueIdentifier
+  academicYearId String @db.UniqueIdentifier
+  sectionId      String @db.UniqueIdentifier
+  rollNo         String @db.NVarChar(10)
+  status         String @default("ACTIVE") @db.NVarChar(15) // ACTIVE | PROMOTED | DETAINED | TRANSFERRED | PASSED_OUT | LEFT
+
+  student      Student      @relation(fields: [studentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  section      Section      @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, academicYearId])
+  @@unique([sectionId, rollNo])
+  @@index([organizationId, branchId, academicYearId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ACADEMICS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Grade {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  name           String  @db.NVarChar(30) // Class 10, LKG
+  sortOrder      Int
+  medium         String? @db.NVarChar(30)
+
+  branch   Branch    @relation(fields: [branchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sections Section[]
+
+  @@unique([branchId, name])
+}
+
+model Section {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  gradeId        String  @db.UniqueIdentifier
+  name           String  @db.NVarChar(10) // A, B
+  classTeacherId String? @db.UniqueIdentifier // Staff
+  capacity       Int     @default(40)
+  room           String? @db.NVarChar(30)
+
+  grade       Grade            @relation(fields: [gradeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  enrollments Enrollment[]
+  subjects    SectionSubject[]
+
+  @@unique([gradeId, name])
+}
+
+model Subject {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  code           String @db.NVarChar(20) // MATH
+  name           String @db.NVarChar(100)
+
+  sectionSubjects SectionSubject[]
+
+  @@unique([organizationId, code])
+}
+
+/// Who teaches which subject in which section, per academic year.
+model SectionSubject {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  academicYearId String  @db.UniqueIdentifier
+  sectionId      String  @db.UniqueIdentifier
+  subjectId      String  @db.UniqueIdentifier
+  teacherId      String? @db.UniqueIdentifier // Staff
+
+  section Section           @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subject Subject           @relation(fields: [subjectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  periods TimetablePeriod[]
+
+  @@unique([academicYearId, sectionId, subjectId])
+}
+
+model TimetablePeriod {
+  id               String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId   String @db.UniqueIdentifier
+  branchId         String @db.UniqueIdentifier
+  sectionSubjectId String @db.UniqueIdentifier
+  dayOfWeek        Int // 1 = Monday
+  periodNo         Int
+  startTime        String @db.NVarChar(5) // 08:00
+  endTime          String @db.NVarChar(5)
+
+  sectionSubject SectionSubject @relation(fields: [sectionSubjectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, dayOfWeek])
+}
+
+model Exam {
+  id               String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId   String    @db.UniqueIdentifier
+  branchId         String?   @db.UniqueIdentifier // null = common exam for all branches
+  academicYearId   String    @db.UniqueIdentifier
+  name             String    @db.NVarChar(60) // Mid Term
+  gradeNames       String    @db.NVarChar(200) // comma list of grades sitting the exam
+  resultsPublished Boolean   @default(false)
+  publishedAt      DateTime?
+
+  papers ExamPaper[]
+
+  @@index([organizationId, branchId, academicYearId])
+}
+
+model ExamPaper {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  examId         String   @db.UniqueIdentifier
+  subjectId      String   @db.UniqueIdentifier
+  date           DateTime @db.Date
+  startTime      String   @db.NVarChar(5)
+  endTime        String   @db.NVarChar(5)
+  maxMarks       Decimal  @db.Decimal(6, 2)
+  passMarks      Decimal  @db.Decimal(6, 2)
+
+  exam  Exam   @relation(fields: [examId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  marks Mark[]
+}
+
+model Mark {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  examPaperId    String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  marks          Decimal? @db.Decimal(6, 2)
+  isAbsent       Boolean  @default(false)
+  enteredById    String   @db.UniqueIdentifier // User
+  updatedAt      DateTime @updatedAt
+
+  examPaper ExamPaper @relation(fields: [examPaperId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([examPaperId, studentId])
+}
+
+/// One attendance register: a section on a date (optionally one period / subject).
+model AttendanceSession {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  sectionId      String   @db.UniqueIdentifier
+  date           DateTime @db.Date
+  periodNo       Int? // null = daily attendance
+  subjectId      String?  @db.UniqueIdentifier
+  takenById      String   @db.UniqueIdentifier // User
+
+  entries AttendanceEntry[]
+
+  @@unique([sectionId, date, periodNo])
+  @@index([organizationId, branchId, date])
+}
+
+model AttendanceEntry {
+  organizationId String @db.UniqueIdentifier
+  sessionId      String @db.UniqueIdentifier
+  studentId      String @db.UniqueIdentifier
+  status         String @db.NVarChar(10) // PRESENT | ABSENT | LEAVE | LATE
+
+  session AttendanceSession @relation(fields: [sessionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([sessionId, studentId])
+  @@index([studentId])
+}
+
+model Assignment {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  sectionId      String   @db.UniqueIdentifier
+  subjectId      String   @db.UniqueIdentifier
+  teacherId      String   @db.UniqueIdentifier // Staff
+  title          String   @db.NVarChar(200)
+  description    String?  @db.NVarChar(Max)
+  assignedDate   DateTime @db.Date
+  dueDate        DateTime @db.Date
+  totalMarks     Decimal  @db.Decimal(6, 2)
+
+  submissions AssignmentSubmission[]
+
+  @@index([organizationId, branchId, sectionId])
+}
+
+model AssignmentSubmission {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  assignmentId   String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  submittedAt    DateTime
+  fileId         String?  @db.UniqueIdentifier // Attachment
+  marksObtained  Decimal? @db.Decimal(6, 2)
+  feedback       String?  @db.NVarChar(1000)
+  gradedById     String?  @db.UniqueIdentifier
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([assignmentId, studentId])
+}
+
+model StudyNote {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  sectionId      String   @db.UniqueIdentifier
+  subjectId      String   @db.UniqueIdentifier
+  uploadedById   String   @db.UniqueIdentifier // Staff
+  title          String   @db.NVarChar(200)
+  description    String?  @db.NVarChar(1000)
+  fileId         String   @db.UniqueIdentifier // Attachment
+  downloads      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, branchId, sectionId])
+}
+
+/// Files live in blob storage (Azure Blob / S3); the database keeps metadata only.
+model Attachment {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String?  @db.UniqueIdentifier
+  fileName       String   @db.NVarChar(260)
+  mimeType       String   @db.NVarChar(100)
+  sizeBytes      Int
+  storageKey     String   @db.NVarChar(500)
+  uploadedById   String?  @db.UniqueIdentifier // null = sent from the public website (job applications)
+  createdAt      DateTime @default(now())
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FEES & ACCOUNTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Annual fee for a grade in a branch (organization defaults can be copied per branch).
+model FeePlan {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  academicYearId String  @db.UniqueIdentifier
+  gradeId        String  @db.UniqueIdentifier
+  feeHead        String  @default("TUITION") @db.NVarChar(30) // TUITION | TRANSPORT | HOSTEL | EXAM | OTHER
+  annualAmount   Decimal @db.Decimal(12, 2)
+
+  installments FeeInstallment[]
+
+  @@unique([academicYearId, gradeId, feeHead])
+}
+
+model FeeInstallment {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  feePlanId      String   @db.UniqueIdentifier
+  installmentNo  Int
+  name           String   @db.NVarChar(60)
+  dueDate        DateTime @db.Date
+  percent        Decimal  @db.Decimal(5, 2) // share of the annual amount
+
+  feePlan FeePlan @relation(fields: [feePlanId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([feePlanId, installmentNo])
+}
+
+model FeeConcession {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  studentId      String  @db.UniqueIdentifier
+  academicYearId String  @db.UniqueIdentifier
+  type           String  @db.NVarChar(30) // MERIT | SIBLING | STAFF_WARD | RTE | NEED_BASED | CATEGORY
+  percent        Decimal @db.Decimal(5, 2)
+  approvedById   String  @db.UniqueIdentifier
+
+  @@unique([studentId, academicYearId, type])
+}
+
+model FeePayment {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  installmentId  String   @db.UniqueIdentifier // FeeInstallment
+  amount         Decimal  @db.Decimal(12, 2)
+  lateFee        Decimal  @default(0) @db.Decimal(12, 2)
+  method         String   @db.NVarChar(20) // UPI | CARD | NETBANKING | CASH | CHEQUE
+  status         String   @db.NVarChar(15) // PENDING | SUCCESS | FAILED | REFUNDED
+  receiptNo      String   @db.NVarChar(40)
+  gatewayRef     String?  @db.NVarChar(100) // Razorpay payment id
+  idempotencyKey String   @unique @db.NVarChar(100) // stops double charging on retries
+  receivedById   String?  @db.UniqueIdentifier // cashier for counter payments
+  paidAt         DateTime
+
+  @@unique([organizationId, receiptNo])
+  @@index([organizationId, branchId, paidAt])
+  @@index([studentId])
+}
+
+model Expense {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  date           DateTime @db.Date
+  category       String   @db.NVarChar(40)
+  description    String   @db.NVarChar(300)
+  amount         Decimal  @db.Decimal(12, 2)
+  paidTo         String?  @db.NVarChar(150)
+  method         String   @db.NVarChar(20) // UPI | CASH | CHEQUE | BANK_TRANSFER | CARD
+  createdById    String   @db.UniqueIdentifier
+
+  @@index([organizationId, branchId, date])
+}
+
+model PayrollRun {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier
+  month          String    @db.NVarChar(7) // 2026-10
+  status         String    @db.NVarChar(15) // PROCESSED | PAID
+  processedAt    DateTime
+  paidAt         DateTime?
+
+  payslips Payslip[]
+
+  @@unique([branchId, month])
+}
+
+model Payslip {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  payrollRunId   String  @db.UniqueIdentifier
+  staffId        String  @db.UniqueIdentifier
+  gross          Decimal @db.Decimal(12, 2)
+  deductions     Decimal @db.Decimal(12, 2)
+  net            Decimal @db.Decimal(12, 2)
+  breakdown      String  @db.NVarChar(Max) // JSON of earnings & deductions
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  staff      Staff      @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([payrollRunId, staffId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// HR
+// ═════════════════════════════════════════════════════════════════════════════
+
+model LeaveRequest {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier
+  staffId        String    @db.UniqueIdentifier
+  type           String    @db.NVarChar(15) // CASUAL | SICK | EARNED | MATERNITY | UNPAID
+  fromDate       DateTime  @db.Date
+  toDate         DateTime  @db.Date
+  reason         String    @db.NVarChar(500)
+  status         String    @default("PENDING") @db.NVarChar(10) // PENDING | APPROVED | REJECTED
+  decidedById    String?   @db.UniqueIdentifier
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, status])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// COMMUNICATION
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Announcement {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String?  @db.UniqueIdentifier // null = whole organization
+  title          String   @db.NVarChar(200)
+  body           String   @db.NVarChar(Max)
+  category       String   @db.NVarChar(20) // ACADEMIC | FEES | EVENT | GENERAL
+  priority       String   @db.NVarChar(10) // HIGH | MEDIUM | LOW
+  createdById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  audiences AnnouncementAudience[]
+
+  @@index([organizationId, branchId, createdAt])
+}
+
+model AnnouncementAudience {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  announcementId String  @db.UniqueIdentifier
+  audienceType   String  @db.NVarChar(15) // EVERYONE | STAFF | STUDENTS | PARENTS | SECTION
+  sectionId      String? @db.UniqueIdentifier
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Message {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  fromUserId     String    @db.UniqueIdentifier
+  toUserId       String    @db.UniqueIdentifier
+  aboutStudentId String?   @db.UniqueIdentifier // parent ↔ teacher threads
+  subject        String    @db.NVarChar(200)
+  body           String    @db.NVarChar(Max)
+  sentAt         DateTime  @default(now())
+  readAt         DateTime?
+
+  @@index([organizationId, toUserId, sentAt])
+}
+
+/// Outgoing SMS / WhatsApp / email (fee reminders, absence alerts…).
+model Notification {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String?   @db.UniqueIdentifier
+  channel        String    @db.NVarChar(10) // SMS | WHATSAPP | EMAIL | PUSH
+  toAddress      String    @db.NVarChar(200)
+  template       String    @db.NVarChar(60)
+  payload        String    @db.NVarChar(Max)
+  status         String    @db.NVarChar(10) // QUEUED | SENT | FAILED
+  sentAt         DateTime?
+
+  @@index([organizationId, status])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// LIBRARY
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Book {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  title          String  @db.NVarChar(300)
+  author         String  @db.NVarChar(200)
+  isbn           String? @db.NVarChar(20)
+  category       String  @db.NVarChar(50)
+  publisher      String? @db.NVarChar(150)
+  edition        String? @db.NVarChar(50)
+  publishYear    Int?
+  totalCopies    Int
+  rack           String? @db.NVarChar(20)
+
+  loans BookLoan[]
+
+  @@index([organizationId, branchId])
+}
+
+model BookLoan {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier
+  bookId         String    @db.UniqueIdentifier
+  studentId      String?   @db.UniqueIdentifier
+  staffId        String?   @db.UniqueIdentifier
+  issueDate      DateTime  @db.Date
+  dueDate        DateTime  @db.Date
+  returnDate     DateTime? @db.Date
+  finePaid       Decimal   @default(0) @db.Decimal(10, 2)
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, returnDate])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INVENTORY
+// ═════════════════════════════════════════════════════════════════════════════
+
+model InventoryItem {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  sku            String  @db.NVarChar(40)
+  name           String  @db.NVarChar(200)
+  category       String  @db.NVarChar(60)
+  unit           String  @db.NVarChar(20)
+  location       String  @db.NVarChar(100)
+  quantity       Int
+  minQuantity    Int
+  unitPrice      Decimal @db.Decimal(12, 2)
+  condition      String  @db.NVarChar(15) // NEW | EXCELLENT | GOOD | FAIR | POOR | DAMAGED
+
+  movements StockMovement[]
+
+  @@unique([branchId, sku])
+}
+
+model StockMovement {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  itemId         String   @db.UniqueIdentifier
+  type           String   @db.NVarChar(5) // IN | OUT
+  quantity       Int
+  note           String?  @db.NVarChar(300)
+  createdById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TRANSPORT & HOSTEL
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Vehicle {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String   @db.UniqueIdentifier
+  branchId        String   @db.UniqueIdentifier
+  registrationNo  String   @db.NVarChar(20)
+  type            String   @db.NVarChar(15) // BUS | MINI_BUS | VAN
+  capacity        Int
+  driverStaffId   String?  @db.UniqueIdentifier
+  insuranceExpiry DateTime @db.Date
+  fitnessExpiry   DateTime @db.Date
+
+  routes TransportRoute[]
+
+  @@unique([organizationId, registrationNo])
+}
+
+model TransportRoute {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  branchId       String  @db.UniqueIdentifier
+  name           String  @db.NVarChar(60)
+  vehicleId      String? @db.UniqueIdentifier
+  monthlyFee     Decimal @db.Decimal(10, 2)
+  pickupTime     String  @db.NVarChar(5)
+
+  vehicle Vehicle?    @relation(fields: [vehicleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  stops   RouteStop[]
+
+  @@unique([branchId, name])
+}
+
+model RouteStop {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  routeId        String @db.UniqueIdentifier
+  name           String @db.NVarChar(100)
+  sortOrder      Int
+
+  route  TransportRoute        @relation(fields: [routeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  riders TransportAllocation[]
+}
+
+model TransportAllocation {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  studentId      String @db.UniqueIdentifier
+  academicYearId String @db.UniqueIdentifier
+  stopId         String @db.UniqueIdentifier
+
+  stop RouteStop @relation(fields: [stopId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([studentId, academicYearId])
+}
+
+model HostelRoom {
+  id             String @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String @db.UniqueIdentifier
+  branchId       String @db.UniqueIdentifier
+  block          String @db.NVarChar(20)
+  number         String @db.NVarChar(20)
+  capacity       Int
+  type           String @db.NVarChar(10) // BOYS | GIRLS
+
+  allocations HostelAllocation[]
+
+  @@unique([branchId, block, number])
+}
+
+model HostelAllocation {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  roomId         String    @db.UniqueIdentifier
+  studentId      String    @db.UniqueIdentifier
+  fromDate       DateTime  @db.Date
+  toDate         DateTime? @db.Date // null = still living there
+
+  room HostelRoom @relation(fields: [roomId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([studentId])
+}
+
+model Outpass {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  fromDate       DateTime @db.Date
+  toDate         DateTime @db.Date
+  reason         String   @db.NVarChar(300)
+  status         String   @db.NVarChar(10) // PENDING | APPROVED | REJECTED | RETURNED
+  decidedById    String?  @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, branchId, status])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// FRONT OFFICE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Enquiry {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier
+  studentName    String    @db.NVarChar(150)
+  parentName     String    @db.NVarChar(150)
+  phone          String    @db.NVarChar(20)
+  email          String?   @db.NVarChar(200)
+  gradeName      String    @db.NVarChar(30)
+  source         String    @db.NVarChar(30)
+  status         String    @db.NVarChar(20) // NEW | CONTACTED | VISIT_SCHEDULED | ADMITTED | CLOSED
+  notes          String?   @db.NVarChar(1000)
+  followUpDate   DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, branchId, status])
+}
+
+model Visitor {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String    @db.UniqueIdentifier
+  branchId       String    @db.UniqueIdentifier
+  name           String    @db.NVarChar(150)
+  phone          String?   @db.NVarChar(20)
+  purpose        String    @db.NVarChar(60)
+  toMeet         String    @db.NVarChar(150)
+  people         Int       @default(1)
+  inAt           DateTime
+  outAt          DateTime?
+
+  @@index([organizationId, branchId, inAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PROCUREMENT: indent → HOD → store → principal / management → quotation → PO → GRN → bill → payment
+// Approval limits live in Organization.settings ("procurement").
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Vendor {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  name           String  @db.NVarChar(200)
+  category       String? @db.NVarChar(100)
+  gstin          String? @db.NVarChar(15)
+  pan            String? @db.NVarChar(10)
+  phone          String? @db.NVarChar(20)
+  email          String? @db.NVarChar(200)
+  address        String? @db.NVarChar(500)
+  bankAccount    String? @db.NVarChar(Max) // encrypted JSON { bankName, accountNo, ifsc }
+  tdsSection     String  @default("194C") @db.NVarChar(5) // NONE | 194C | 194J | 194I
+  isIndividual   Boolean @default(false) // individual / HUF: 194C at 1%
+  isActive       Boolean @default(true)
+
+  @@unique([organizationId, name])
+}
+
+/// A requisition raised by a teacher (or any staff member) for items they need.
+model Indent {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  no             String   @db.NVarChar(30) // IND/26-27/0001
+  requestedById  String   @db.UniqueIdentifier // User
+  requesterName  String   @db.NVarChar(150)
+  department     String   @db.NVarChar(100)
+  location       String   @db.NVarChar(150)
+  purpose        String   @db.NVarChar(1000)
+  priority       String   @default("NORMAL") @db.NVarChar(10) // NORMAL | URGENT
+  neededBy       DateTime @db.Date
+  status         String   @db.NVarChar(25) // PENDING_HOD | PENDING_STORE | PENDING_PRINCIPAL | PENDING_MANAGEMENT | APPROVED_FOR_PURCHASE | PO_RAISED | GOODS_RECEIVED | COMPLETED | REJECTED | CANCELLED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lines  IndentLine[]
+  events IndentEvent[]
+
+  @@unique([organizationId, no])
+  @@index([organizationId, branchId, status])
+}
+
+model IndentLine {
+  id              String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String  @db.UniqueIdentifier
+  indentId        String  @db.UniqueIdentifier
+  lineNo          Int
+  name            String  @db.NVarChar(200)
+  qty             Int
+  unit            String  @db.NVarChar(20)
+  estRate         Decimal @db.Decimal(12, 2)
+  inventoryItemId String? @db.UniqueIdentifier // InventoryItem
+  category        String? @db.NVarChar(60) // for a new inventory item
+  issuedFromStock Int? // filled at store check
+  toPurchase      Int?
+
+  indent Indent @relation(fields: [indentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([indentId, lineNo])
+}
+
+/// Every step taken on an indent, in order (the trail shown to everyone involved).
+model IndentEvent {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  indentId       String   @db.UniqueIdentifier
+  at             DateTime @default(now())
+  byUserId       String?  @db.UniqueIdentifier // null = automatic step
+  byName         String   @db.NVarChar(150)
+  role           String   @db.NVarChar(20) // TEACHER | HOD | STORE | PRINCIPAL | MANAGEMENT | PURCHASE | SYSTEM
+  action         String   @db.NVarChar(100)
+  remark         String?  @db.NVarChar(1000)
+
+  indent Indent @relation(fields: [indentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([indentId, at])
+}
+
+model Quotation {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  indentId       String   @db.UniqueIdentifier
+  vendorId       String   @db.UniqueIdentifier
+  gstPercent     Decimal  @db.Decimal(5, 2)
+  deliveryDays   Int
+  validTill      DateTime @db.Date
+  notes          String?  @db.NVarChar(500)
+  receivedAt     DateTime @default(now())
+
+  lines QuotationLine[]
+
+  @@unique([indentId, vendorId])
+}
+
+model QuotationLine {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  quotationId    String  @db.UniqueIdentifier
+  lineNo         Int // indent line
+  rate           Decimal @db.Decimal(12, 2)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([quotationId, lineNo])
+}
+
+model PurchaseOrder {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  no             String   @db.NVarChar(30) // PO/26-27/0001
+  indentId       String   @db.UniqueIdentifier
+  vendorId       String   @db.UniqueIdentifier
+  quotationId    String   @db.UniqueIdentifier
+  orderDate      DateTime @db.Date
+  deliveryBy     DateTime @db.Date
+  gstPercent     Decimal  @db.Decimal(5, 2)
+  status         String   @db.NVarChar(20) // SENT | PARTIALLY_RECEIVED | RECEIVED | CANCELLED
+  selectionNote  String?  @db.NVarChar(500)
+  createdById    String   @db.UniqueIdentifier
+
+  lines PurchaseOrderLine[]
+
+  @@unique([organizationId, no])
+  @@index([organizationId, branchId, status])
+}
+
+model PurchaseOrderLine {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  poId           String  @db.UniqueIdentifier
+  lineNo         Int // indent line
+  name           String  @db.NVarChar(200)
+  qty            Int
+  unit           String  @db.NVarChar(20)
+  rate           Decimal @db.Decimal(12, 2)
+  received       Int     @default(0)
+  accepted       Int     @default(0)
+
+  po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([poId, lineNo])
+}
+
+/// Goods receipt note: what arrived against a PO and what passed the quality check.
+model GoodsReceipt {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  no             String   @db.NVarChar(30) // GRN/26-27/0001
+  poId           String   @db.UniqueIdentifier
+  receivedOn     DateTime @db.Date
+  receivedById   String   @db.UniqueIdentifier
+  checkedBy      String   @db.NVarChar(150)
+  challanNo      String   @db.NVarChar(60)
+
+  lines GoodsReceiptLine[]
+
+  @@unique([organizationId, no])
+}
+
+model GoodsReceiptLine {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  grnId          String  @db.UniqueIdentifier
+  lineNo         Int
+  received       Int
+  accepted       Int
+  rejectedReason String? @db.NVarChar(300)
+
+  grn GoodsReceipt @relation(fields: [grnId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([grnId, lineNo])
+}
+
+/// The vendor's invoice, checked against PO rate x accepted quantity (three-way match).
+model VendorBill {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  poId           String   @db.UniqueIdentifier
+  vendorId       String   @db.UniqueIdentifier
+  billNo         String   @db.NVarChar(60)
+  billDate       DateTime @db.Date
+  subtotal       Decimal  @db.Decimal(12, 2)
+  gst            Decimal  @db.Decimal(12, 2)
+  total          Decimal  @db.Decimal(12, 2)
+  expected       Decimal  @db.Decimal(12, 2)
+  status         String   @db.NVarChar(10) // MATCHED | MISMATCH | APPROVED | PAID | ON_HOLD
+  note           String?  @db.NVarChar(500)
+  enteredById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  @@unique([vendorId, billNo])
+  @@index([organizationId, branchId, status])
+}
+
+model VendorPayment {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  billId         String   @unique @db.UniqueIdentifier
+  vendorId       String   @db.UniqueIdentifier
+  paidOn         DateTime @db.Date
+  gross          Decimal  @db.Decimal(12, 2)
+  tdsSection     String   @db.NVarChar(5) // NONE | 194C | 194J | 194I
+  tds            Decimal  @db.Decimal(12, 2)
+  net            Decimal  @db.Decimal(12, 2)
+  mode           String   @db.NVarChar(10) // NEFT | CHEQUE | UPI
+  reference      String   @db.NVarChar(60)
+  expenseId      String?  @db.UniqueIdentifier // Expense booked for this payment
+  paidById       String   @db.UniqueIdentifier
+
+  @@index([organizationId, branchId, paidOn])
+}
+
+/// Petty cash book (imprest): small cash spends and top-ups back to the float.
+model PettyCashVoucher {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  voucherDate    DateTime @db.Date
+  kind           String   @db.NVarChar(6) // SPEND | TOPUP
+  purpose        String   @db.NVarChar(300)
+  paidTo         String   @db.NVarChar(150)
+  category       String?  @db.NVarChar(40)
+  amount         Decimal  @db.Decimal(10, 2)
+  expenseId      String?  @db.UniqueIdentifier
+  approvedById   String   @db.UniqueIdentifier
+
+  @@index([organizationId, branchId, voucherDate])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CALENDAR, TRANSFERS, GRADING, ONLINE PAYMENTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Holidays and breaks for an academic year (calendars, attendance and timetable skip them).
+model Holiday {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String?  @db.UniqueIdentifier // null = every branch
+  academicYearId String   @db.UniqueIdentifier
+  name           String   @db.NVarChar(150)
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  type           String   @db.NVarChar(10) // NATIONAL | VACATION | SCHOOL
+
+  @@index([organizationId, academicYearId, startDate])
+}
+
+/// A student moving from one campus to another, kept as history.
+model StudentTransfer {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  fromBranchId   String   @db.UniqueIdentifier
+  toBranchId     String   @db.UniqueIdentifier
+  academicYearId String   @db.UniqueIdentifier
+  transferDate   DateTime @db.Date
+  reason         String?  @db.NVarChar(500)
+  approvedById   String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, studentId])
+}
+
+/// Marks → grade bands used on report cards, e.g. CBSE's A1–E.
+model GradingScale {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  name           String  @db.NVarChar(60)
+  bands          String  @db.NVarChar(Max) // JSON [{ min, max, grade, point, remark }]
+  isDefault      Boolean @default(false)
+
+  @@unique([organizationId, name])
+}
+
+/// One online payment attempt (a Razorpay order). A FeePayment is written once it succeeds.
+model PaymentOrder {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  studentId      String   @db.UniqueIdentifier
+  installmentId  String   @db.UniqueIdentifier // FeeInstallment
+  amount         Decimal  @db.Decimal(12, 2)
+  lateFee        Decimal  @default(0) @db.Decimal(12, 2)
+  gateway        String   @db.NVarChar(20) // RAZORPAY
+  gatewayOrderId String   @db.NVarChar(100)
+  status         String   @db.NVarChar(10) // CREATED | PAID | FAILED | EXPIRED
+  feePaymentId   String?  @db.UniqueIdentifier
+  createdById    String?  @db.UniqueIdentifier // parent / student who started it
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([gateway, gatewayOrderId])
+  @@index([organizationId, studentId])
+}
+
+/// Raw payment-gateway webhooks, stored before processing so none is lost or handled twice.
+/// Platform table: the organization is only known after the payload is read.
+model PaymentWebhookEvent {
+  id          String    @id @default(uuid()) @db.UniqueIdentifier
+  gateway     String    @db.NVarChar(20)
+  eventId     String    @db.NVarChar(100)
+  eventType   String    @db.NVarChar(60)
+  payload     String    @db.NVarChar(Max)
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  error       String?   @db.NVarChar(1000)
+
+  @@unique([gateway, eventId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCHOOL WEBSITE & RECRUITMENT
+// ═════════════════════════════════════════════════════════════════════════════
+// The school's public website content itself lives in Organization.settings ("website").
+
+/// Demo requests from the SchoolERP product website. Platform table (no organization yet).
+model DemoLead {
+  id          String   @id @default(uuid()) @db.UniqueIdentifier
+  name        String   @db.NVarChar(150)
+  institution String   @db.NVarChar(200)
+  role        String?  @db.NVarChar(60)
+  phone       String   @db.NVarChar(20)
+  email       String?  @db.NVarChar(200)
+  city        String   @db.NVarChar(100)
+  campuses    String?  @db.NVarChar(20)
+  students    String?  @db.NVarChar(30)
+  message     String?  @db.NVarChar(1000)
+  status      String   @default("NEW") @db.NVarChar(15) // NEW | CONTACTED | DEMO_DONE | WON | LOST
+  createdAt   DateTime @default(now())
+
+  @@index([status, createdAt])
+}
+
+/// A job shown on the website's Careers page.
+model JobOpening {
+  id               String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId   String   @db.UniqueIdentifier
+  branchId         String   @db.UniqueIdentifier
+  campus           String?  @db.NVarChar(150) // as shown on the website, e.g. "Junior Wing, Aliganj"
+  title            String   @db.NVarChar(150)
+  department       String   @db.NVarChar(100)
+  category         String   @db.NVarChar(20) // TEACHING | NON_TEACHING | ADMINISTRATION | SUPPORT
+  employmentType   String   @db.NVarChar(20) // FULL_TIME | PART_TIME | CONTRACT | GUEST
+  vacancies        Int
+  qualification    String   @db.NVarChar(300)
+  experience       String?  @db.NVarChar(200)
+  salary           String?  @db.NVarChar(100) // as shown on the website
+  description      String   @db.NVarChar(Max)
+  responsibilities String?  @db.NVarChar(Max) // JSON array
+  postedOn         DateTime @db.Date
+  lastDate         DateTime @db.Date
+  isOpen           Boolean  @default(true)
+
+  applications JobApplication[]
+
+  @@index([organizationId, branchId, isOpen])
+}
+
+model JobApplication {
+  id              String    @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String    @db.UniqueIdentifier
+  branchId        String    @db.UniqueIdentifier
+  jobOpeningId    String?   @db.UniqueIdentifier // null = general application
+  name            String    @db.NVarChar(150)
+  email           String    @db.NVarChar(200)
+  phone           String    @db.NVarChar(20)
+  qualification   String    @db.NVarChar(300)
+  experienceYears Int
+  currentEmployer String?   @db.NVarChar(150)
+  expectedSalary  String?   @db.NVarChar(60)
+  coverLetter     String?   @db.NVarChar(Max)
+  resumeFileId    String?   @db.UniqueIdentifier // Attachment
+  status          String    @default("APPLIED") @db.NVarChar(15) // APPLIED | SHORTLISTED | INTERVIEW | SELECTED | REJECTED
+  interviewDate   DateTime? @db.Date
+  notes           String?   @db.NVarChar(1000)
+  appliedAt       DateTime  @default(now())
+
+  jobOpening JobOpening? @relation(fields: [jobOpeningId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, status])
+}
+
+/// Contact, grievance and TC-verification messages sent from the website.
+model ContactMessage {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String?  @db.UniqueIdentifier
+  kind           String   @db.NVarChar(15) // CONTACT | GRIEVANCE | FEEDBACK
+  name           String   @db.NVarChar(150)
+  phone          String   @db.NVarChar(20)
+  email          String?  @db.NVarChar(200)
+  subject        String   @db.NVarChar(200)
+  message        String   @db.NVarChar(Max)
+  resolved       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, resolved, createdAt])
+}
+
+/// Former students who registered on the website's Alumni page.
+model AlumniMember {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  name           String   @db.NVarChar(150)
+  batchYear      Int
+  email          String   @db.NVarChar(200)
+  phone          String?  @db.NVarChar(20)
+  occupation     String?  @db.NVarChar(150)
+  city           String?  @db.NVarChar(100)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, batchYear])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUDIT
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Who changed what — required for fees, marks and student records.
+model AuditLog {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String?  @db.UniqueIdentifier
+  userId         String   @db.UniqueIdentifier
+  action         String   @db.NVarChar(20) // CREATE | UPDATE | DELETE | LOGIN | EXPORT
+  entity         String   @db.NVarChar(60) // FeePayment, Mark…
+  entityId       String?  @db.NVarChar(60)
+  before         String?  @db.NVarChar(Max)
+  after          String?  @db.NVarChar(Max)
+  ip             String?  @db.NVarChar(45)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, entity, createdAt])
+}
