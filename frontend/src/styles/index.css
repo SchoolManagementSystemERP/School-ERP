@@ -1,0 +1,14 @@
+@import './fonts.css';
+@import './tailwind.css';
+@import './theme.css';
+
+/* Print only the page content (e.g. admit cards, receipts) — not the app shell. */
+@media print {
+  aside,
+  header {
+    display: none !important;
+  }
+  .lg\:pl-64 {
+    padding-left: 0 !important;
+  }
+}
