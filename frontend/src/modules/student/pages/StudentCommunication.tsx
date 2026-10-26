@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { isVisibleTo, markMessageRead, messagesFor, sendMessage, useAnnouncements, useMessages } from "@/store/communication";
 import { useCurrentStudent } from "@/store/session";
 import { useTeachers } from "@/store/teachers";
+import { MiniStats } from "@/components/common/MiniStats";
 import { useSectionBase } from "@/lib/section";
 
 export function StudentCommunication() {
@@ -94,51 +95,11 @@ export function StudentCommunication() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Total Announcements</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{announcements.length}</p>
-              </div>
-              <div className="bg-blue-50 dark:bg-blue-500/10 p-3 rounded-lg">
-                <Bell className="h-6 w-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Unread Messages</p>
-                <p className="text-2xl font-bold text-foreground mt-1">
-                  {messages.filter((m) => !m.read).length}
-                </p>
-              </div>
-              <div className="bg-orange-50 dark:bg-orange-500/10 p-3 rounded-lg">
-                <MessageSquare className="h-6 w-6 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">High Priority</p>
-                <p className="text-2xl font-bold text-foreground mt-1">
-                  {announcements.filter((a) => a.priority === "high").length}
-                </p>
-              </div>
-              <div className="bg-red-50 dark:bg-red-500/10 p-3 rounded-lg">
-                <AlertCircle className="h-6 w-6 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <MiniStats items={[
+        { label: "Unread messages", value: messages.filter((m) => !m.read).length, icon: MessageSquare, tone: "amber" },
+        { label: "Notices", value: announcements.length, icon: Bell, tone: "blue" },
+        { label: "Important", value: announcements.filter((a) => a.priority === "high").length, icon: AlertCircle, tone: "red" },
+      ]} />
 
       <Tabs defaultValue="announcements" className="w-full">
         <TabsList>

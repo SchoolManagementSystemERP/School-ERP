@@ -9,3 +9,4 @@ SET QUOTED_IDENTIFIER ON; -- required for filtered indexes (sqlcmd defaults to O
 CREATE UNIQUE NONCLUSTERED INDEX [Staff_userId_key] ON [dbo].[Staff]([userId]) WHERE [userId] IS NOT NULL;
 CREATE UNIQUE NONCLUSTERED INDEX [Student_userId_key] ON [dbo].[Student]([userId]) WHERE [userId] IS NOT NULL;
 CREATE UNIQUE NONCLUSTERED INDEX [Guardian_userId_key] ON [dbo].[Guardian]([userId]) WHERE [userId] IS NOT NULL;
+CREATE UNIQUE NONCLUSTERED INDEX [UX_Vendor_code] ON [dbo].[Vendor]([organizationId], [code]) WHERE [code] IS NOT NULL;

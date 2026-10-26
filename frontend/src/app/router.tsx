@@ -134,6 +134,10 @@ const studentPages: RouteObject[] = [
 ];
 
 const payroll = page(() => import("@/modules/hr/pages/Payroll"), "Payroll");
+const compliance = page(() => import("@/modules/hr/pages/Compliance"), "Compliance");
+const expenseClaims = page(() => import("@/modules/hr/pages/ExpenseClaims"), "ExpenseClaims");
+/** Employee self-service — every staff portal has it. */
+const myHr = { path: "my-hr", ...page(() => import("@/modules/hr/pages/MyHr"), "MyHr") };
 
 const site = (name: string) => page(() => import("@/modules/website/pages/SiteInfoPages"), name as "SiteAbout");
 
@@ -182,6 +186,7 @@ export const router = createBrowserRouter([
     { path: "library", ...P.library },
     { path: "communication", ...P.communication },
     { path: "purchase-approvals", ...page(() => import("@/modules/procurement/pages/PurchaseApprovals"), "PrincipalPurchaseApprovals") },
+    { path: "claims", ...expenseClaims },
     { path: "setup/academic-year", ...P.setupAcademicYear },
     { path: "setup/classes", ...P.setupClasses },
     { path: "setup/sections", ...P.setupSections },
@@ -189,6 +194,7 @@ export const router = createBrowserRouter([
     { path: "setup/teachers", ...P.setupTeachers },
     { path: "setup/inventory", ...P.setupInventory },
     { path: "setup/parents", ...P.setupParents },
+    myHr,
   ]),
 
   portal("/vice-principal", "viceprincipal", VicePrincipalLayout, [
@@ -206,6 +212,7 @@ export const router = createBrowserRouter([
     { path: "setup/students", ...P.setupStudents },
     { path: "setup/teachers", ...P.setupTeachers },
     { path: "setup/parents", ...P.setupParents },
+    myHr,
   ]),
 
   portal("/admin", "admin", AdminLayout, [
@@ -231,12 +238,14 @@ export const router = createBrowserRouter([
     { path: "department", ...page(() => import("@/modules/teacher/pages/MyDepartment"), "MyDepartment") },
     { path: "leave", ...page(() => import("@/modules/teacher/pages/MyLeave"), "MyLeave") },
     { path: "requisitions", ...page(() => import("@/modules/procurement/pages/TeacherIndents"), "TeacherIndents") },
+    myHr,
   ]),
 
   portal("/exams", "exams", ExamsLayout, [
     { index: true, ...page(() => import("@/modules/exams/pages/ExamSchedule"), "ExamSchedule") },
     { path: "admit-cards", ...page(() => import("@/modules/exams/pages/AdmitCards"), "AdmitCards") },
     { path: "results", ...P.marks },
+    myHr,
   ]),
 
   // ── Students & parents ─────────────────────────────────────────────────────
@@ -251,7 +260,9 @@ export const router = createBrowserRouter([
     { path: "expenses", ...page(() => import("@/modules/accounts/pages/Expenses"), "Expenses") },
     { path: "payables", ...page(() => import("@/modules/procurement/pages/AccountsPayables"), "AccountsPayables") },
     { path: "payroll", ...payroll },
+    { path: "compliance", ...compliance },
     { path: "reports", ...page(() => import("@/modules/accounts/pages/AccountsReports"), "AccountsReports") },
+    myHr,
   ]),
 
   portal("/hr", "hr", HRLayout, [
@@ -262,6 +273,16 @@ export const router = createBrowserRouter([
     { path: "payroll", ...payroll },
     { path: "setup/teachers", ...P.setupTeachers },
     { path: "teachers", ...P.teachers },
+    { path: "attendance", ...page(() => import("@/modules/hr/pages/StaffAttendance"), "StaffAttendance") },
+    { path: "offers", ...page(() => import("@/modules/hr/pages/Offers"), "Offers") },
+    { path: "onboarding", ...page(() => import("@/modules/hr/pages/Onboarding"), "Onboarding") },
+    { path: "trainings", ...page(() => import("@/modules/hr/pages/Trainings"), "Trainings") },
+    { path: "compensation", ...page(() => import("@/modules/hr/pages/Compensation"), "Compensation") },
+    { path: "claims", ...expenseClaims },
+    { path: "compliance", ...compliance },
+    { path: "exits", ...page(() => import("@/modules/hr/pages/Separations"), "Separations") },
+    { path: "settings", ...page(() => import("@/modules/hr/pages/HrSettings"), "HrSettings") },
+    myHr,
   ]),
 
   portal("/reception", "reception", ReceptionLayout, [
@@ -270,6 +291,7 @@ export const router = createBrowserRouter([
     { path: "visitors", ...page(() => import("@/modules/reception/pages/Visitors"), "Visitors") },
     { path: "admission", ...P.setupStudents },
     { path: "students", ...page(() => import("@/modules/teacher/pages/Students"), "Students") },
+    myHr,
   ]),
 
   // ── Facilities ─────────────────────────────────────────────────────────────
@@ -278,15 +300,22 @@ export const router = createBrowserRouter([
     { path: "books", ...page(() => import("@/modules/library/pages/LibraryBooks"), "LibraryBooks") },
     { path: "issue-return", ...page(() => import("@/modules/library/pages/LibraryIssueReturn"), "LibraryIssueReturn") },
     { path: "members", ...page(() => import("@/modules/library/pages/LibraryMembers"), "LibraryMembers") },
+    myHr,
   ]),
 
   portal("/inventory", "inventory", InventoryLayout, [
     { index: true, ...page(() => import("@/modules/inventory/pages/InventoryDashboard"), "InventoryDashboard") },
     { path: "items", ...page(() => import("@/modules/inventory/pages/InventoryItems"), "InventoryItems") },
-    { path: "purchase", ...page(() => import("@/modules/procurement/pages/StorePurchase"), "StorePurchase") },
+    { path: "purchase", loader: () => redirect("/inventory/requisitions") },
+    { path: "requisitions", ...page(() => import("@/modules/procurement/pages/Requisitions"), "Requisitions") },
+    { path: "purchase-orders", ...page(() => import("@/modules/procurement/pages/PurchaseOrders"), "PurchaseOrders") },
+    { path: "goods-receipts", ...page(() => import("@/modules/procurement/pages/GoodsReceipts"), "GoodsReceipts") },
+    { path: "vendors", ...page(() => import("@/modules/procurement/pages/VendorMaster"), "VendorMaster") },
     { path: "categories", ...page(() => import("@/modules/inventory/pages/InventoryCategories"), "InventoryCategories") },
     { path: "reports", ...page(() => import("@/modules/inventory/pages/InventoryReports"), "InventoryReports") },
+    { path: "analysis", ...page(() => import("@/modules/inventory/pages/StockAnalysis"), "StockAnalysis") },
     { path: "setup/*", ...P.setupInventory },
+    myHr,
   ]),
 
   portal("/transport", "transport", TransportLayout, [
@@ -294,12 +323,14 @@ export const router = createBrowserRouter([
     { path: "routes", ...page(() => import("@/modules/transport/pages/TransportRoutes"), "TransportRoutes") },
     { path: "vehicles", ...page(() => import("@/modules/transport/pages/Vehicles"), "Vehicles") },
     { path: "allocation", ...page(() => import("@/modules/transport/pages/TransportAllocation"), "TransportAllocation") },
+    myHr,
   ]),
 
   portal("/hostel", "warden", HostelLayout, [
     { index: true, ...page(() => import("@/modules/hostel/pages/HostelDashboard"), "HostelDashboard") },
     { path: "rooms", ...page(() => import("@/modules/hostel/pages/HostelRooms"), "HostelRooms") },
     { path: "outpass", ...page(() => import("@/modules/hostel/pages/Outpasses"), "Outpasses") },
+    myHr,
   ]),
 
   { path: "*", Component: NotFound },

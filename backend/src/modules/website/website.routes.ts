@@ -147,6 +147,7 @@ websiteRouter.get('/job-applications', async (req, res) => {
       id: a.id, jobId: a.jobOpeningId, name: a.name, email: a.email, phone: a.phone, qualification: a.qualification, experienceYears: a.experienceYears,
       currentEmployer: a.currentEmployer, expectedSalary: a.expectedSalary, coverLetter: a.coverLetter, resumeName: a.resumeFileId ? files.get(a.resumeFileId) ?? null : null,
       status: a.status, interviewDate: toDateString(a.interviewDate), notes: a.notes, appliedAt: toDateString(a.appliedAt),
+      source: a.source, screeningScore: a.screeningScore, screeningNotes: a.screeningNotes,
     }));
   });
   res.json(rows);
@@ -156,7 +157,10 @@ websiteRouter.get('/job-applications', async (req, res) => {
 websiteRouter.patch('/job-applications/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = z.object({ status: z.enum(APP_STATUSES), interviewDate: dateOnly.nullable(), notes: z.string().trim().max(1000).nullable() }).partial().parse(req.body);
+  const body = z.object({
+    status: z.enum(APP_STATUSES), interviewDate: dateOnly.nullable(), notes: z.string().trim().max(1000).nullable(),
+    source: z.string().trim().max(30).nullable(), screeningScore: z.number().int().min(0).max(100).nullable(), screeningNotes: z.string().trim().max(1000).nullable(),
+  }).partial().parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const a = await tx.jobApplication.findUnique({ where: { id } });
     if (!a) throw notFound('Application');

@@ -22,7 +22,9 @@
     "test:communication": "tsx scripts/test-communication.ts",
     "test:website": "tsx scripts/test-website.ts",
     "test:facilities": "tsx scripts/test-facilities.ts",
-    "seed:procurement": "tsx scripts/seed-procurement-demo.ts"
+    "seed:procurement": "tsx scripts/seed-procurement-demo.ts",
+    "seed:hr": "tsx scripts/seed-hr-demo.ts",
+    "test:hrms": "tsx scripts/test-hrms.ts"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

@@ -63,6 +63,12 @@ async function main() {
   const r2 = await call(teacher, "POST", "/procurement/indents", { department: "Mathematics", location: "Maths Lab", purpose: "API test HOD", neededBy: "2026-12-01", lines: [{ name: "Graph paper", qty: 5, unit: "packs", estRate: 80 }] });
   created.indents.push(r2.body.id);
   ok(r2.body.department === "Science", "department comes from the teacher's staff record, not the request");
+  ok(/^PR\//.test(ind.no), "requisitions are numbered PR/yy-yy/nnnn", ind.no);
+
+  const sr = await call(store, "POST", "/procurement/indents", { department: "Store", location: "Main store", purpose: "API test reorder", neededBy: "2026-12-01", lines: [{ name: stockItem.name, qty: 5, unit: "pcs", estRate: 100, inventoryItemId: stockItem.id }] });
+  created.indents.push(sr.body.id);
+  ok(sr.status === 201 && sr.body.status === "PENDING_STORE" && sr.body.events[0]?.role === "STORE", "the store raises its own PR (reorder)", sr.body);
+  ok((await call(store, "POST", `/procurement/indents/${sr.body.id}/store-check`, { lines: [{ issue: 2, estRate: 100 }] })).status === 400, "a reorder PR cannot be issued from the stock it replenishes");
 
   ok((await call(principal, "POST", `/procurement/indents/${ind.id}/principal`, { approve: true })).status === 409, "principal cannot approve before the store check");
   ok((await call(teacher, "POST", `/procurement/indents/${ind.id}/store-check`, { lines: [] })).status === 403, "a teacher cannot do the store check");
@@ -116,6 +122,8 @@ async function main() {
   const pay = await call(accountant, "POST", `/payables/bills/${right.body.id}/pay`, { mode: "NEFT", reference: "UTR123456", paidOn: "2026-10-22" });
   ok(pay.status === 201 && pay.body.tds === 0 && pay.body.net === 1108.8 && !!pay.body.expenseId, "paid ₹1,108.80 (no TDS below ₹30,000) and booked as an expense", pay.body);
   ok((await call(accountant, "POST", `/payables/bills/${right.body.id}/pay`, { mode: "NEFT", reference: "UTR2", paidOn: "2026-10-22" })).status === 409, "a bill cannot be paid twice");
+  const storePo = (await call(store, "GET", "/procurement/purchase-orders")).body.find((p: { id: string }) => p.id === po.body.id);
+  ok(storePo?.bills?.length === 2 && storePo.bills.some((b: { status: string; paidOn: string | null }) => b.status === "PAID" && b.paidOn), "the store sees the order's bills and payment from Accounts", storePo?.bills);
 
   console.log("Management approval and settings");
   const big = await call(teacher, "POST", "/procurement/indents", { location: "Biology Lab", purpose: "API test big", neededBy: "2026-12-01", lines: [{ name: "Microscope (API test)", qty: 2, unit: "pcs", estRate: 30000 }] });

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { studentAssignmentStatus, submitAssignment, useAssignments } from "@/store/assignments";
+import { MiniStats } from "@/components/common/MiniStats";
 import { useCurrentStudent } from "@/store/session";
 
 export function StudentAssignments() {
@@ -218,47 +219,11 @@ export function StudentAssignments() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Pending</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{pendingAssignments.length}</p>
-              </div>
-              <div className="bg-orange-50 dark:bg-orange-500/10 p-3 rounded-lg">
-                <Clock className="h-6 w-6 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Submitted</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{submittedAssignments.length}</p>
-              </div>
-              <div className="bg-green-50 dark:bg-green-500/10 p-3 rounded-lg">
-                <CheckCircle2 className="h-6 w-6 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Overdue</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{overdueAssignments.length}</p>
-              </div>
-              <div className="bg-red-50 dark:bg-red-500/10 p-3 rounded-lg">
-                <AlertCircle className="h-6 w-6 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <MiniStats items={[
+        { label: "To submit", value: pendingAssignments.length, icon: Clock, tone: "amber" },
+        { label: "Overdue", value: overdueAssignments.length, icon: AlertCircle, tone: overdueAssignments.length ? "red" : "slate" },
+        { label: "Submitted", value: submittedAssignments.length, icon: CheckCircle2, tone: "green" },
+      ]} />
 
       {/* Search */}
       <div className="relative">

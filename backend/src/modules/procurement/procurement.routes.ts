@@ -40,10 +40,11 @@ function fyCode(d = new Date()) {
   const start = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
   return `${String(start).slice(-2)}-${String(start + 1).slice(-2)}`;
 }
-async function nextNo(tx: Tx, prefix: "IND" | "PO" | "GRN", organizationId: string) {
+/** Purchase requisitions are numbered PR/26-27/0001 (older ones kept their IND/ numbers). */
+async function nextNo(tx: Tx, prefix: "PR" | "PO" | "GRN", organizationId: string) {
   const start = `${prefix}/${fyCode()}/`;
   const where = { organizationId, no: { startsWith: start } };
-  const count = prefix === "IND" ? await tx.indent.count({ where }) : prefix === "PO" ? await tx.purchaseOrder.count({ where }) : await tx.goodsReceipt.count({ where });
+  const count = prefix === "PR" ? await tx.indent.count({ where }) : prefix === "PO" ? await tx.purchaseOrder.count({ where }) : await tx.goodsReceipt.count({ where });
   return `${start}${String(count + 1).padStart(4, "0")}`;
 }
 
@@ -175,12 +176,13 @@ procurementRouter.post("/procurement/indents", async (req, res) => {
     const skipHod = !hod || hod.userId === ctx.userId;
     const created = await tx.indent.create({
       data: {
-        organizationId: ctx.organizationId, branchId, no: await nextNo(tx, "IND", ctx.organizationId), requestedById: ctx.userId, requesterName: ctx.name,
+        organizationId: ctx.organizationId, branchId, no: await nextNo(tx, "PR", ctx.organizationId), requestedById: ctx.userId, requesterName: ctx.name,
         department, location: body.location, purpose: body.purpose, priority: body.priority, neededBy: body.neededBy, status: skipHod ? "PENDING_STORE" : "PENDING_HOD",
         lines: { create: body.lines.map((l, n) => ({ organizationId: ctx.organizationId, lineNo: n, name: l.name, qty: l.qty, unit: l.unit, estRate: l.estRate, inventoryItemId: l.inventoryItemId ?? null })) },
       },
     });
-    await addEvent(tx, ctx, created.id, "TEACHER", "Raised indent");
+    // the store raises PRs itself too (reorders); everyone else is a requester
+    await addEvent(tx, ctx, created.id, ctx.access.can("procurement.store", branchId) ? "STORE" : "TEACHER", "Raised purchase requisition");
     if (skipHod) await addEvent(tx, ctx, created.id, "SYSTEM", "HOD step skipped", hod ? "Raised by the HOD" : `${department} department has no HOD — sent to store`, true);
     await audit(tx, ctx, { action: "CREATE", entity: "Indent", entityId: created.id, branchId, after: body });
     return loadIndent(tx, created.id);
@@ -234,6 +236,8 @@ procurementRouter.post("/procurement/indents/:id/store-check", async (req, res) 
     need(ctx, "procurement.store", i.branchId);
     requireStatus(i, "PENDING_STORE");
     if (body.lines.length !== i.lines.length) throw badRequest("Decide every line.");
+    // the store's own replenishment PR buys stock — issuing from that same stock would empty it
+    if (i.events[0]?.role === "STORE" && body.lines.some((d) => d.issue > 0)) throw badRequest("This is the store's own reorder — nothing can be issued from stock; buy the full quantity.");
     let est = 0;
     const issued: string[] = [];
     for (const [n, l] of i.lines.entries()) {
@@ -305,7 +309,7 @@ const vendorInput = z.object({
   isIndividual: z.boolean().default(false),
   isActive: z.boolean().default(true),
 });
-type VendorRow = { id: string; name: string; category: string | null; gstin: string | null; pan: string | null; phone: string | null; email: string | null; address: string | null; bankAccount: string | null; tdsSection: string; isIndividual: boolean; isActive: boolean };
+type VendorRow = { id: string; code: string | null; name: string; category: string | null; gstin: string | null; pan: string | null; phone: string | null; email: string | null; address: string | null; bankAccount: string | null; tdsSection: string; isIndividual: boolean; isActive: boolean };
 function vendorOut(v: VendorRow) {
   const bank = decryptJson<{ bankName: string; accountNo: string; ifsc: string }>(v.bankAccount);
   return { ...v, bankAccount: undefined, bank: bank ? { bankName: bank.bankName, ifsc: bank.ifsc, accountLast4: bank.accountNo.slice(-4) } : null };
@@ -323,7 +327,10 @@ procurementRouter.post("/procurement/vendors", async (req, res) => {
   if (!ctx.access.canAnywhere("procurement.store")) throw forbidden();
   const { bank, ...v } = vendorInput.parse(req.body);
   const vendor = await withTenant(ctx.organizationId, async (tx) => {
-    const created = await tx.vendor.create({ data: { ...v, gstin: v.gstin || null, pan: v.pan || null, email: v.email || null, organizationId: ctx.organizationId, bankAccount: bank ? encryptJson(bank) : null } });
+    // vendor code: the next number in the V-0001 series
+    const codes = await tx.vendor.findMany({ where: { code: { startsWith: "V-" } }, select: { code: true } });
+    const code = `V-${String(codes.reduce((m, c) => Math.max(m, Number(c.code?.slice(2)) || 0), 0) + 1).padStart(4, "0")}`;
+    const created = await tx.vendor.create({ data: { ...v, code, gstin: v.gstin || null, pan: v.pan || null, email: v.email || null, organizationId: ctx.organizationId, bankAccount: bank ? encryptJson(bank) : null } });
     await audit(tx, ctx, { action: "CREATE", entity: "Vendor", entityId: created.id, after: { ...v, bank: bank ? "set" : undefined } });
     return created;
   });
@@ -451,8 +458,20 @@ procurementRouter.get("/procurement/purchase-orders", async (req, res) => {
   const ctx = ctxOf(req);
   const branchIds = [...new Set([...scopeBranchesSafe(ctx, "procurement.store"), ...scopeBranchesSafe(ctx, "payables.manage")])];
   if (!branchIds.length) throw forbidden();
-  const pos = await withTenant(ctx.organizationId, (tx) => tx.purchaseOrder.findMany({ where: { branchId: { in: branchIds } }, include: { lines: { orderBy: { lineNo: "asc" } } }, orderBy: { orderDate: "desc" }, take: 200 }));
-  res.json(pos.map((p) => ({ ...p, gstPercent: num(p.gstPercent), orderDate: toDateString(p.orderDate), deliveryBy: toDateString(p.deliveryBy), lines: p.lines.map((l) => ({ ...l, rate: num(l.rate) })) })));
+  const out = await withTenant(ctx.organizationId, async (tx) => {
+    const pos = await tx.purchaseOrder.findMany({ where: { branchId: { in: branchIds } }, include: { lines: { orderBy: { lineNo: "asc" } } }, orderBy: { orderDate: "desc" }, take: 200 });
+    // where each order stands in Accounts: the store follows its GRNs through billing and payment
+    const bills = await tx.vendorBill.findMany({ where: { poId: { in: pos.map((p) => p.id) } }, orderBy: { createdAt: "asc" } });
+    const payments = await tx.vendorPayment.findMany({ where: { billId: { in: bills.map((b) => b.id) } }, select: { billId: true, paidOn: true, net: true } });
+    return pos.map((p) => ({
+      ...p, gstPercent: num(p.gstPercent), orderDate: toDateString(p.orderDate), deliveryBy: toDateString(p.deliveryBy), lines: p.lines.map((l) => ({ ...l, rate: num(l.rate) })),
+      bills: bills.filter((b) => b.poId === p.id).map((b) => {
+        const paid = payments.find((x) => x.billId === b.id);
+        return { billNo: b.billNo, billDate: toDateString(b.billDate), total: num(b.total), status: b.status, paidOn: paid ? toDateString(paid.paidOn) : null };
+      }),
+    }));
+  });
+  res.json(out);
 });
 function scopeBranchesSafe(ctx: RequestContext, permission: string) {
   try {

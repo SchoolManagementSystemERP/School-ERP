@@ -1,14 +1,24 @@
-import { Bell, BookOpen, Box, Building2, FileText, LayoutDashboard, Package, ShoppingCart, Tag, Users, Warehouse } from "lucide-react";
+import { Bell, BookOpen, Box, Building2, ClipboardList, FileText, LayoutDashboard, Package, PackageCheck, PieChart, ShoppingCart, Store, Tag, Users, Warehouse } from "lucide-react";
 import { AppShell, type NavGroup } from "./AppShell";
 
 const nav: NavGroup[] = [
+  { items: [{ name: "Dashboard", href: "/inventory", icon: LayoutDashboard }] },
   {
+    label: "Stock",
     items: [
-      { name: "Dashboard", href: "/inventory", icon: LayoutDashboard },
       { name: "All Items", href: "/inventory/items", icon: Package },
-      { name: "Store & Purchase", href: "/inventory/purchase", icon: ShoppingCart },
+      { name: "Stock Analysis", href: "/inventory/analysis", icon: PieChart },
       { name: "Categories", href: "/inventory/categories", icon: Box },
       { name: "Reports", href: "/inventory/reports", icon: FileText },
+    ],
+  },
+  {
+    label: "Procurement",
+    items: [
+      { name: "Purchase Requisitions", href: "/inventory/requisitions", icon: ClipboardList },
+      { name: "Purchase Orders", href: "/inventory/purchase-orders", icon: ShoppingCart },
+      { name: "Goods Receipts (GRN)", href: "/inventory/goods-receipts", icon: PackageCheck },
+      { name: "Vendor Master", href: "/inventory/vendors", icon: Store },
     ],
   },
 ];

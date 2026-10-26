@@ -36,7 +36,10 @@ for (const m of schema.matchAll(/^model (\w+) \{\n([\s\S]*?)\n\}/gm)) {
 }
 
 // ── Foreign keys ──────────────────────────────────────────────────────────────
-const OVERRIDES = { "StudyNote.uploadedById": "Staff", "Attachment.uploadedById": "User" };
+const OVERRIDES = {
+  "StudyNote.uploadedById": "Staff", "Attachment.uploadedById": "User",
+  "InterviewRound.applicationId": "JobApplication", "JobOffer.applicationId": "JobApplication", "Training.trainerStaffId": "Staff",
+};
 /** History must outlive the people it mentions, so the audit log keeps user ids without a foreign key. */
 const NO_FK = new Set(["AuditLog.userId"]);
 function targetOf(model, field) {
@@ -139,6 +142,15 @@ const RANGE = [
   ["VendorBill", "amounts", "[subtotal] > 0 AND [gst] >= 0 AND [total] = [subtotal] + [gst] AND [expected] >= 0"],
   ["VendorPayment", "amounts", "[gross] > 0 AND [tds] >= 0 AND [net] = [gross] - [tds]"],
   ["PettyCashVoucher", "amount", "[amount] > 0"],
+  ["StaffAttendance", "times", "([inTime] IS NULL OR [outTime] IS NULL OR [outTime] >= [inTime])"],
+  ["ExpenseClaim", "amount", "[amount] > 0"],
+  ["InterviewRound", "rating", "[roundNo] > 0 AND ([rating] IS NULL OR [rating] BETWEEN 1 AND 5)"],
+  ["JobOffer", "terms", "[ctcAnnual] > 0 AND [validTill] >= CAST([createdAt] AS DATE)"],
+  ["JobApplication", "screening", "[screeningScore] IS NULL OR [screeningScore] BETWEEN 0 AND 100"],
+  ["Training", "dates", "[endDate] >= [startDate] AND [durationHours] > 0 AND [passPercent] BETWEEN 0 AND 100"],
+  ["TrainingQuestion", "answer", "[answerIndex] >= 0"],
+  ["TrainingEnrollment", "scores", "([preScore] IS NULL OR [preScore] BETWEEN 0 AND 100) AND ([postScore] IS NULL OR [postScore] BETWEEN 0 AND 100) AND ([rating] IS NULL OR [rating] BETWEEN 1 AND 5)"],
+  ["Separation", "dates", "[lastWorkingDay] >= [noticeDate]"],
   ["Membership", "scope", "([scopeType] = N'ORG' AND [regionId] IS NULL AND [branchId] IS NULL) OR ([scopeType] = N'REGION' AND [regionId] IS NOT NULL AND [branchId] IS NULL) OR ([scopeType] = N'BRANCH' AND [branchId] IS NOT NULL AND [regionId] IS NULL)"],
 ];
 for (const [table, suffix, expr] of RANGE) {

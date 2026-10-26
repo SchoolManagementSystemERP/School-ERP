@@ -101,11 +101,17 @@ export interface JobApplication {
   /** YYYY-MM-DD */
   interviewDate?: string;
   notes: string;
+  /** Website, Referral, Job portal, Walk-in… */
+  source: string;
+  /** HR's screening score 0–100 (null = not screened) */
+  screeningScore: number | null;
+  screeningNotes: string;
 }
 
 interface ApiApplication {
   id: string; jobId: string | null; name: string; email: string; phone: string; qualification: string; experienceYears: number; currentEmployer: string | null;
   expectedSalary: string | null; coverLetter: string | null; resumeName: string | null; status: string; interviewDate: string | null; notes: string | null; appliedAt: string;
+  source: string | null; screeningScore: number | null; screeningNotes: string | null;
 }
 const title = (v: string) => v.charAt(0) + v.slice(1).toLowerCase();
 
@@ -115,13 +121,14 @@ export const applicationStore = remoteStore<JobApplication[]>("job-applications"
     ? (await ifAllowed(api.get<ApiApplication[]>("/job-applications"), [])).map((a) => ({
         id: numId("job-application", a.id), jobId: a.jobId ? numId("job", a.jobId) : null, name: a.name, email: a.email, phone: a.phone, qualification: a.qualification,
         experienceYears: a.experienceYears, currentEmployer: a.currentEmployer ?? "", expectedSalary: a.expectedSalary ?? "", coverLetter: a.coverLetter ?? "",
-        resumeName: a.resumeName ?? "", status: title(a.status) as ApplicationStatus, appliedOn: a.appliedAt, notes: a.notes ?? "", ...(a.interviewDate ? { interviewDate: a.interviewDate } : {}),
+        resumeName: a.resumeName ?? "", status: title(a.status) as ApplicationStatus, appliedOn: a.appliedAt, notes: a.notes ?? "",
+        source: a.source ?? "Website", screeningScore: a.screeningScore, screeningNotes: a.screeningNotes ?? "", ...(a.interviewDate ? { interviewDate: a.interviewDate } : {}),
       }))
     : []);
 export const useApplications = () => applicationStore.useValue();
 
 /** Sends an application from the website. Resolves to true when the school received it. */
-export function submitApplication(a: Omit<JobApplication, "id" | "status" | "appliedOn" | "notes" | "interviewDate">) {
+export function submitApplication(a: Omit<JobApplication, "id" | "status" | "appliedOn" | "notes" | "interviewDate" | "source" | "screeningScore" | "screeningNotes">) {
   return submitJobApplication({ ...a, jobId: a.jobId != null ? maybeGuid("job", a.jobId) ?? null : null });
 }
 
@@ -131,5 +138,15 @@ export function updateApplication(id: number, patch: Partial<JobApplication>) {
       ...(patch.status ? { status: patch.status.toUpperCase() } : {}),
       ...(patch.interviewDate !== undefined ? { interviewDate: patch.interviewDate || null } : {}),
       ...(patch.notes !== undefined ? { notes: patch.notes || null } : {}),
+      ...(patch.screeningScore !== undefined ? { screeningScore: patch.screeningScore } : {}),
+      ...(patch.screeningNotes !== undefined ? { screeningNotes: patch.screeningNotes || null } : {}),
     }));
+}
+
+/** A candidate HR found itself (referral, job portal, walk-in). */
+export async function addCandidate(c: { jobId: number | null; name: string; email: string; phone: string; qualification: string; experienceYears: number; currentEmployer: string; expectedSalary: string; source: string; notes: string }) {
+  await api.post("/job-applications", {
+    ...c, jobId: c.jobId != null ? guidOf("job", c.jobId) : null, currentEmployer: c.currentEmployer || null, expectedSalary: c.expectedSalary || null, notes: c.notes || null,
+  });
+  await applicationStore.load(true);
 }

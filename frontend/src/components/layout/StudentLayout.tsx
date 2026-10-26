@@ -1,8 +1,8 @@
 import {
-  Award, BookOpen, Calendar, ClipboardCheck, FileText, Gift, IndianRupee, LayoutDashboard, MessageSquare, Upload,
+  Award, BookOpen, Calendar, ClipboardCheck, FileText, Gift, Home, IndianRupee, LayoutDashboard, MessageSquare, NotebookText,
 } from "lucide-react";
 import { useCurrentStudent } from "@/store/session";
-import { AppShell, type NavGroup } from "./AppShell";
+import { AppShell, type NavGroup, type NavItem } from "./AppShell";
 
 const nav: NavGroup[] = [
   {
@@ -12,10 +12,10 @@ const nav: NavGroup[] = [
     label: "Academics",
     items: [
       { name: "Marks & Results", href: "/student/marks", icon: FileText },
-      { name: "Assignments", href: "/student/assignments", icon: BookOpen },
+      { name: "Homework", href: "/student/assignments", icon: BookOpen },
       { name: "Attendance", href: "/student/attendance", icon: ClipboardCheck },
       { name: "Timetable", href: "/student/timetable", icon: Calendar },
-      { name: "Resources", href: "/student/resources", icon: Upload },
+      { name: "Study Notes", href: "/student/resources", icon: NotebookText },
       { name: "Admit Card", href: "/student/admit-card", icon: Award },
     ],
   },
@@ -24,9 +24,17 @@ const nav: NavGroup[] = [
     items: [
       { name: "Fees", href: "/student/fees", icon: IndianRupee },
       { name: "Holidays", href: "/student/holidays", icon: Gift },
-      { name: "Communication", href: "/student/communication", icon: MessageSquare },
+      { name: "Messages & Notices", href: "/student/communication", icon: MessageSquare },
     ],
   },
+];
+
+/** Tab bar on phones: what a student opens most. */
+const bottomNav: NavItem[] = [
+  { name: "Home", href: "/student", icon: Home },
+  { name: "Timetable", href: "/student/timetable", icon: Calendar },
+  { name: "Homework", href: "/student/assignments", icon: BookOpen },
+  { name: "Results", href: "/student/marks", icon: FileText },
 ];
 
 export function StudentLayout() {
@@ -36,6 +44,7 @@ export function StudentLayout() {
       portal="Student"
       home="/student"
       nav={nav}
+      bottomNav={bottomNav}
       user={{
         name: student?.name ?? "Student",
         subtitle: student ? `${student.class} · Roll ${student.rollNo}` : "",

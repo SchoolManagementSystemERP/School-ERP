@@ -9,6 +9,8 @@ import type { AttendanceStatus, DayAttendanceRecord } from "@/types/attendance";
 export interface SubjectResult {
   subject: string;
   marks: number;
+  /** Maximum marks of the paper. */
+  max: number;
   percentage: number;
   grade: string;
 }
@@ -24,7 +26,7 @@ export interface ExamResult {
 
 /** A student's result for one exam, or null if no marks have been entered yet. */
 export function examResult(marks: MarksStore, cls: string, exam: string, studentId: number): ExamResult | null {
-  const subjects: (SubjectResult & { max: number })[] = [];
+  const subjects: SubjectResult[] = [];
   // the usual subjects first, then any other subject the exam has marks for
   const entered = Object.keys(marks[cls]?.[exam] ?? {});
   for (const subject of [...SUBJECTS.filter((x) => entered.includes(x)), ...entered.filter((x) => !SUBJECTS.includes(x))]) {
