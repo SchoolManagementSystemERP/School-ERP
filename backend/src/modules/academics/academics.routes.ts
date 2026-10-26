@@ -5,7 +5,7 @@ import { withTenant, type Tx } from '../../db/prisma.js';
 import { currentYear } from '../../lib/academic.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, toDateString } from '../../lib/http.js';
 import { memberBranches, readScope } from '../../lib/scope.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 
@@ -321,7 +321,7 @@ academicsRouter.post('/exams', async (req, res) => {
 academicsRouter.patch('/exams/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = examInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(examInput.omit({ branchId: true })).parse(req.body);
   if (body.papers) checkPapers(body.papers);
 
   const exam = await withTenant(ctx.organizationId, async (tx) => {

@@ -187,11 +187,15 @@ Edit `prisma/schema.prisma`, then regenerate the SQL so both stay in sync:
 
 ```bash
 npx prisma validate
-npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > database/schema.sql
+npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script > database/schema.sql
 ```
 
-Then write the change as `database/migrations/NNN-name.sql` (`npx prisma migrate diff --from-schema-datamodel <old> --to-schema-datamodel prisma/schema.prisma --script`),
-run `node scripts/gen-constraints.mjs` and `databasemigrate.ps1`. Every new table with an `organizationId`
+Then write the change as `database/migrations/NNN-name.sql` (`npx prisma migrate diff --from-schema <old> --to-schema prisma/schema.prisma --script`),
+run `node scripts/gen-constraints.mjs` and `database/migrate.ps1`.
+
+Prisma 7: the connection URL is no longer in `schema.prisma` — the CLI reads `DATABASE_URL` through
+`prisma.config.ts`, and the API connects with the SQL Server driver adapter (`@prisma/adapter-mssql`) in
+`src/db/prisma.ts`. Every new table with an `organizationId`
 column must be added to `database/row-level-security.sql` and, for existing databases, in the migration.
 An optional column that must be unique when set goes in `database/filtered-unique-indexes.sql`
 (not `@unique`: SQL Server allows only one NULL in a unique constraint).
