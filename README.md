@@ -72,7 +72,8 @@ Sign in at `/login` with the school code, a username and a password. Demo logins
 
 | Role | Portal | Main work |
 |---|---|---|
-| Admin / Management | `/admin` | Login accounts, roles & permissions, system and website settings, purchase approvals above the principal's limit |
+| Group office (chairman, director, secretary, treasurer, trustees, group heads, regional / cluster heads) | `/group` | **Group Dashboard**: every school in their scope side by side; purchase approvals above the principal's limit |
+| Admin / IT head | `/admin` | Login accounts, roles & permissions, system and website settings, Group Dashboard |
 | Principal | `/principal` | All academics, finance, inventory, library, school setup, purchase approvals, expense-claim approvals |
 | Vice principal | `/vice-principal` | Academics and people, without finance and setup |
 | Teacher | `/teacher` | Attendance, marks, homework, notes, timetable, students, messages, leave, requisitions, My Class |
@@ -86,6 +87,18 @@ Sign in at `/login` with the school code, a username and a password. Demo logins
 | Librarian · Transport manager · Hostel warden | `/librarian` · `/transport` · `/hostel` | Library, transport, hostel |
 
 Every staff portal also has **My HR** (section 4.11).
+
+**Above the school.** An organization (school group / trust) has a head office and, optionally, regions
+(zones or clusters). Built-in head-office roles: Chairman (Group Owner), CEO / Director, Secretary / Manager,
+Treasurer, Trustee, Group Admin, IT Head, Academic Head, Finance Head, HR Head, Admissions Head, Purchase Head,
+Compliance / Legal Officer, Internal Auditor, Quality / Inspection Officer, Transport Head, Marketing / PR Head,
+Training Coordinator. A region office: Regional Manager, Assistant Regional Director, Cluster / Area Coordinator,
+Regional Academic Coordinator, Subject Coordinator, Regional Exam Coordinator, Regional Inspector, Regional
+Training Coordinator, Special Education / Counselling Coordinator, Regional Accounts Officer, Regional Auditor,
+Regional HR Officer, Regional Admissions Coordinator, Regional Purchase / Store Officer, Regional Transport
+Coordinator, Regional Infrastructure / Maintenance Officer, Regional IT Coordinator, Sports & Co-curricular
+Coordinator, Regional PR / Marketing and Regional Office Staff — they see only their region's schools. The admin
+can add more roles; a custom organization- or region-wide role opens the Group office.
 
 ---
 
@@ -167,10 +180,17 @@ The approval rules: the HOD approves first, the principal up to a limit, managem
 above a threshold need three quotations (or a written reason). Accounts enters the vendor's bill, which must
 match the PO and the GRN (three-way match), and pays it with TDS deducted.
 
-### 4.13 Users, roles and audit
-Login accounts, 20 built-in roles with editable permissions, branch-level access, and an audit log of changes.
+### 4.13 Group dashboard (head office)
+Every school in the person's scope side by side — students and staff, fees collected / overdue and the
+collection rate, attendance (last 30 days), average result of published exams, spending and payroll, open
+admission enquiries, purchase requests and low stock — with group and region totals, below-target values
+flagged, charts, a detail panel per school and CSV export. A regional or cluster head sees only their region.
+Only totals are shown, never personal records.
 
-### 4.14 Reports and dashboards
+### 4.14 Users, roles and audit
+Login accounts, 52 built-in roles with editable permissions, branch-level access, and an audit log of changes.
+
+### 4.15 Reports and dashboards
 Dashboards for every role (attendance, results, fee collection, staff, stock, purchasing), CSV exports and
 printable documents (receipts, admit cards, payslips, offer letters, POs, GRNs, exit letters).
 
@@ -194,7 +214,7 @@ Microsoft SQL Server, modelled in `backend/prisma/schema.prisma` (92 tables). Th
 
 Ids are GUIDs; money is DECIMAL(12,2) in rupees. Foreign keys, check constraints and indexes are in
 `backend/database/constraints.sql`; changes to existing databases are versioned migrations
-(`backend/database/migrations/002–010`).
+(`backend/database/migrations/002–012`).
 
 ---
 
@@ -232,6 +252,7 @@ npx prisma generate
 npm run import:frontend     # demo school "greenwood"
 npm run seed:procurement    # optional: purchasing demo
 npm run seed:hr             # optional: trainings and an expense claim
+npm run seed:group          # optional: makes "greenwood" a 3-school group with head-office sign-ins
 npm run dev                 # API on http://localhost:4000/api/v1
 
 # 2. frontend, in a second terminal
@@ -252,7 +273,7 @@ computer's address with `ipconfig` (IPv4), and open `http://<that address>:5173`
 Node.js through Windows Firewall on private networks if the page does not open.
 
 **Tests:** `cd backend` and run `npm run test:db`, `test:academics`, `test:finance`, `test:communication`,
-`test:website`, `test:facilities`, `test:procurement`, `test:hrms` — 339 checks over HTTP as each role.
+`test:website`, `test:facilities`, `test:procurement`, `test:hrms`, `test:group` — 366 checks over HTTP as each role.
 
 ---
 

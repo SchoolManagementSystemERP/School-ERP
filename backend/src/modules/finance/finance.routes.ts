@@ -46,8 +46,8 @@ type Account = {
   installments: { id: string; no: number; name: string; dueDate: string; amount: number }[];
 };
 
-/** Fee accounts (this academic year) for the given students. */
-async function feeAccounts(tx: Tx, studentIds: string[], yearId: string): Promise<Account[]> {
+/** Fee accounts (this academic year) for the given students. Also used by the group dashboard. */
+export async function feeAccounts(tx: Tx, studentIds: string[], yearId: string): Promise<Account[]> {
   if (!studentIds.length) return [];
   const [students, enrollments, concessions] = await Promise.all([
     tx.student.findMany({ where: { id: { in: studentIds } }, select: { id: true, branchId: true } }),

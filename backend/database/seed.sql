@@ -85,7 +85,41 @@ INSERT INTO @roles VALUES
   ('LIBRARIAN', 'Librarian', 'BRANCH', 'students.read,library.manage,procurement.request'),
   ('INVENTORY_MANAGER', 'Inventory Manager', 'BRANCH', 'inventory.manage,procurement.request,procurement.store'),
   ('STUDENT', 'Student', 'SELF', 'self.view,messages.send'),
-  ('PARENT', 'Parent', 'SELF', 'self.view,messages.send');
+  ('PARENT', 'Parent', 'SELF', 'self.view,messages.send'),
+  -- head office of a school group (migration 011)
+  ('DIRECTOR', 'CEO / Director (Schools)', 'ORG', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read,fees.read,leave.approve,announcements.send,messages.send,procurement.approve_management'),
+  ('TRUST_SECRETARY', 'Secretary / Manager', 'ORG', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read,fees.read,announcements.send,procurement.approve_management'),
+  ('TREASURER', 'Treasurer', 'ORG', 'reports.view,group.view,fees.read,procurement.approve_management'),
+  ('TRUSTEE', 'Trustee / Board Member', 'ORG', 'reports.view,group.view'),
+  ('ADMISSIONS_HEAD', 'Admissions Head', 'ORG', 'reports.view,group.view,students.read,students.write,frontoffice.manage'),
+  ('PURCHASE_HEAD', 'Purchase Head', 'ORG', 'reports.view,group.view,inventory.manage,procurement.store'),
+  ('IT_HEAD', 'IT Head', 'ORG', 'reports.view,group.view,users.manage'),
+  ('COMPLIANCE_OFFICER', 'Compliance / Legal Officer', 'ORG', 'reports.view,group.view,students.read,staff.read'),
+  ('INTERNAL_AUDITOR', 'Internal Auditor', 'ORG', 'reports.view,group.view,fees.read,staff.read'),
+  ('INSPECTION_OFFICER', 'Quality / Inspection Officer', 'ORG', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read'),
+  ('TRANSPORT_HEAD', 'Transport Head', 'ORG', 'reports.view,group.view,students.read,transport.manage'),
+  ('MARKETING_HEAD', 'Marketing / PR Head', 'ORG', 'reports.view,group.view,frontoffice.manage,announcements.send'),
+  ('TRAINING_COORDINATOR', 'Training Coordinator', 'ORG', 'reports.view,group.view,staff.read'),
+  ('CLUSTER_HEAD', 'Cluster / Area Coordinator', 'REGION', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read,fees.read'),
+  -- region office (migration 012)
+  ('ASST_REGIONAL_DIRECTOR', 'Assistant Regional Director', 'REGION', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read,fees.read'),
+  ('REGIONAL_ACADEMIC_COORDINATOR', 'Regional Academic Coordinator', 'REGION', 'reports.view,group.view,students.read,attendance.read,marks.read'),
+  ('SUBJECT_COORDINATOR', 'Subject Coordinator (Region)', 'REGION', 'reports.view,group.view,marks.read,staff.read'),
+  ('REGIONAL_EXAM_COORDINATOR', 'Regional Exam Coordinator', 'REGION', 'reports.view,group.view,students.read,attendance.read,marks.read,exams.manage'),
+  ('REGIONAL_INSPECTOR', 'Regional Inspector / Academic Auditor', 'REGION', 'reports.view,group.view,students.read,staff.read,attendance.read,marks.read'),
+  ('REGIONAL_TRAINING_COORDINATOR', 'Regional Training Coordinator', 'REGION', 'reports.view,group.view,staff.read'),
+  ('REGIONAL_COUNSELLING_COORDINATOR', 'Special Education / Counselling Coordinator', 'REGION', 'reports.view,group.view,students.read,attendance.read,marks.read'),
+  ('REGIONAL_ACCOUNTS_OFFICER', 'Regional Accounts Officer', 'REGION', 'reports.view,group.view,fees.read'),
+  ('REGIONAL_AUDITOR', 'Regional Auditor', 'REGION', 'reports.view,group.view,fees.read,staff.read'),
+  ('REGIONAL_HR_OFFICER', 'Regional HR Officer', 'REGION', 'reports.view,group.view,staff.read,leave.approve'),
+  ('REGIONAL_ADMISSIONS_COORDINATOR', 'Regional Admissions Coordinator', 'REGION', 'reports.view,group.view,students.read,frontoffice.manage'),
+  ('REGIONAL_PURCHASE_OFFICER', 'Regional Purchase / Store Officer', 'REGION', 'reports.view,group.view,inventory.manage'),
+  ('REGIONAL_TRANSPORT_COORDINATOR', 'Regional Transport Coordinator', 'REGION', 'reports.view,group.view,students.read,transport.manage'),
+  ('REGIONAL_INFRASTRUCTURE_OFFICER', 'Regional Infrastructure / Maintenance Officer', 'REGION', 'reports.view,group.view,inventory.manage'),
+  ('REGIONAL_IT_COORDINATOR', 'Regional IT Coordinator', 'REGION', 'reports.view,group.view'),
+  ('REGIONAL_SPORTS_COORDINATOR', 'Sports & Co-curricular Coordinator', 'REGION', 'reports.view,group.view,students.read,announcements.send'),
+  ('REGIONAL_PR_OFFICER', 'Regional PR / Marketing', 'REGION', 'reports.view,group.view,frontoffice.manage,announcements.send'),
+  ('REGIONAL_OFFICE_STAFF', 'Regional Office Staff', 'REGION', 'reports.view,group.view');
 
 INSERT INTO dbo.Role (id, organizationId, code, name, level, isSystem)
 SELECT NEWID(), NULL, code, name, level, 1 FROM @roles;

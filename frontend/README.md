@@ -88,7 +88,16 @@ Sign in with the school code **`greenwood`** and the password **`Demo@1234`** (a
 | Hostel Warden | `warden` | `/hostel` | Rooms, residents, outpasses |
 | Librarian | `librarian` | `/librarian` | Books, issue / return, fines |
 | Inventory Manager | `inventory` | `/inventory` | Items, stock analysis, purchase requisitions, purchase orders, goods receipts, vendor master |
-| Management | `chairman` | `/admin` | Purchases above the principal's limit (after `npm run seed:procurement`) |
+| Management | `chairman` | `/group` | Group Dashboard, purchases above the principal's limit (after `npm run seed:procurement`) |
+
+**Group office (after `npm run seed:group`, which makes `greenwood` a group of three schools — Gomti Nagar and
+Aliganj in the Lucknow region, Kanpur in the Kanpur region):** `chairman`, `director`, `secretary`, `treasurer`,
+`trustee`, `academic.head`, `finance.head`, `hr.head`, `admissions.head`, `purchase.head`, `compliance`, `auditor`,
+`inspection`, `transport.head`, `marketing`, `training` → `/group` (all three schools); the Lucknow region office —
+`regional.manager` and `lko.asst.director`, `lko.academic`, `lko.subject`, `lko.exams`, `lko.inspector`, `lko.training`,
+`lko.counselling`, `lko.accounts`, `lko.auditor`, `lko.hr`, `lko.admissions`, `lko.purchase`, `lko.transport`, `lko.infra`,
+`lko.it`, `lko.sports`, `lko.pr`, `lko.office` → the two Lucknow schools; `cluster.head` → the Kanpur school; `admin`, `it.head` → `/admin` (with the Group Dashboard).
+The login page has a button for each.
 
 Run `npm run seed:hr` in the backend for demo trainings (with slides and a test) and an expense claim.
 

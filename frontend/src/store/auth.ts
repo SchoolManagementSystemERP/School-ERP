@@ -10,7 +10,7 @@ import { numId, selectOrganizationIds } from "@/api/ids";
 export type Role =
   | "admin" | "principal" | "viceprincipal" | "teacher" | "student" | "parent"
   | "accountant" | "reception" | "exams" | "transport" | "warden" | "hr"
-  | "librarian" | "inventory";
+  | "librarian" | "inventory" | "group";
 
 /** Home page and label of each portal. */
 export const ROLE_ACCOUNTS: Record<Role, { label: string; path: string }> = {
@@ -28,12 +28,25 @@ export const ROLE_ACCOUNTS: Record<Role, { label: string; path: string }> = {
   hr: { label: "HR Manager", path: "/hr" },
   librarian: { label: "Librarian", path: "/librarian" },
   inventory: { label: "Inventory Manager", path: "/inventory" },
+  group: { label: "Group Office", path: "/group" },
 };
 
 /** Database role → portal, in order of preference when a user has several roles. */
 const ROLE_PORTAL: [string, Role][] = [
   ["PRINCIPAL", "principal"], ["VICE_PRINCIPAL", "viceprincipal"],
-  ["GROUP_OWNER", "admin"], ["GROUP_ADMIN", "admin"], ["BRANCH_ADMIN", "admin"], ["ACADEMIC_HEAD", "admin"], ["FINANCE_HEAD", "admin"], ["HR_HEAD", "admin"], ["REGIONAL_MANAGER", "admin"],
+  // those who run the system (accounts, roles, settings)
+  ["GROUP_ADMIN", "admin"], ["BRANCH_ADMIN", "admin"], ["IT_HEAD", "admin"],
+  // the group's head office and regional / cluster heads: the group dashboard
+  ["GROUP_OWNER", "group"], ["DIRECTOR", "group"], ["TRUST_SECRETARY", "group"], ["TREASURER", "group"], ["TRUSTEE", "group"],
+  ["ACADEMIC_HEAD", "group"], ["FINANCE_HEAD", "group"], ["HR_HEAD", "group"], ["ADMISSIONS_HEAD", "group"], ["PURCHASE_HEAD", "group"],
+  ["COMPLIANCE_OFFICER", "group"], ["INTERNAL_AUDITOR", "group"], ["INSPECTION_OFFICER", "group"], ["TRANSPORT_HEAD", "group"],
+  ["MARKETING_HEAD", "group"], ["TRAINING_COORDINATOR", "group"], ["REGIONAL_MANAGER", "group"], ["CLUSTER_HEAD", "group"],
+  // region office
+  ["ASST_REGIONAL_DIRECTOR", "group"], ["REGIONAL_ACADEMIC_COORDINATOR", "group"], ["SUBJECT_COORDINATOR", "group"], ["REGIONAL_EXAM_COORDINATOR", "group"],
+  ["REGIONAL_INSPECTOR", "group"], ["REGIONAL_TRAINING_COORDINATOR", "group"], ["REGIONAL_COUNSELLING_COORDINATOR", "group"], ["REGIONAL_ACCOUNTS_OFFICER", "group"],
+  ["REGIONAL_AUDITOR", "group"], ["REGIONAL_HR_OFFICER", "group"], ["REGIONAL_ADMISSIONS_COORDINATOR", "group"], ["REGIONAL_PURCHASE_OFFICER", "group"],
+  ["REGIONAL_TRANSPORT_COORDINATOR", "group"], ["REGIONAL_INFRASTRUCTURE_OFFICER", "group"], ["REGIONAL_IT_COORDINATOR", "group"], ["REGIONAL_SPORTS_COORDINATOR", "group"],
+  ["REGIONAL_PR_OFFICER", "group"], ["REGIONAL_OFFICE_STAFF", "group"],
   ["ACCOUNTANT", "accountant"], ["HR", "hr"], ["EXAM_CONTROLLER", "exams"], ["RECEPTIONIST", "reception"], ["LIBRARIAN", "librarian"],
   ["INVENTORY_MANAGER", "inventory"], ["TRANSPORT_MANAGER", "transport"], ["HOSTEL_WARDEN", "warden"],
   ["TEACHER", "teacher"], ["PARENT", "parent"], ["STUDENT", "student"],
@@ -83,7 +96,33 @@ const branchKey = (org: string) => `school-erp:branch:${org}`;
 
 function portalFor(me: MeResponse): Role | null {
   const codes = new Set(me.memberships.map((m) => m.role.code));
-  return ROLE_PORTAL.find(([code]) => codes.has(code))?.[1] ?? null;
+  const known = ROLE_PORTAL.find(([code]) => codes.has(code))?.[1];
+  if (known) return known;
+  // a custom role made by the school: organization- or region-wide ones open the group office
+  return me.memberships.some((m) => m.scopeType === "ORG" || m.scopeType === "REGION") ? "group" : null;
+}
+
+/** The three sign-in pages: a school's people, a region office, the head office (trust / management). */
+export type LoginLevel = "school" | "region" | "head";
+export const LOGIN_PATH: Record<LoginLevel, string> = { school: "/login", region: "/login/region", head: "/login/head-office" };
+export const LOGIN_LEVEL_LABEL: Record<LoginLevel, string> = { school: "School", region: "Region Office", head: "Head Office" };
+
+/** Which page an account signs in on: organization-wide → head office, region-wide → region office, everyone else → school. */
+export function loginLevelOf(me: MeResponse): LoginLevel {
+  if (me.memberships.some((m) => m.scopeType === "ORG")) return "head";
+  if (me.memberships.some((m) => m.scopeType === "REGION")) return "region";
+  return "school";
+}
+
+const LOGIN_LEVEL = "school-erp:login-level";
+/** The sign-in page this device used last (where to go after signing out or when the session ends). */
+export function lastLoginPath() {
+  try {
+    const level = localStorage.getItem(LOGIN_LEVEL) as LoginLevel | null;
+    return level && level in LOGIN_PATH ? LOGIN_PATH[level] : LOGIN_PATH.school;
+  } catch {
+    return LOGIN_PATH.school;
+  }
 }
 
 /** Applies GET /me: role, branch, teacher / student ids. */
@@ -102,6 +141,9 @@ async function loadMe(): Promise<MeResponse> {
   const branchId = me.branches.find((b) => b.id === saved)?.id ?? own ?? busiest ?? null;
   setBranchId(branchId);
   const role = portalFor(me);
+  try {
+    localStorage.setItem(LOGIN_LEVEL, loginLevelOf(me));
+  } catch { /* ignore */ }
   authStore.set({
     me, role, branchId,
     teacherId: me.staff ? numId("staff", me.staff.id) : 0,
@@ -115,7 +157,7 @@ export async function signIn(organization: string, username: string, password: s
   const res = await api.post<{ accessToken: string; user: { mustChangePassword: boolean } }>("/auth/login", { organization: organization.trim().toLowerCase(), username: username.trim(), password });
   setAccessToken(res.accessToken);
   const me = await loadMe();
-  return { role: authStore.get().role, mustChangePassword: res.user.mustChangePassword, name: me.user.name };
+  return { role: authStore.get().role, mustChangePassword: res.user.mustChangePassword, name: me.user.name, level: loginLevelOf(me) };
 }
 
 export async function changePassword(currentPassword: string, newPassword: string) {

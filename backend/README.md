@@ -20,7 +20,7 @@ backend/
 │   ├── filtered-unique-indexes.sql  "unique when set" columns (Prisma cannot express these)
 │   ├── row-level-security.sql       keeps each organization's data separate
 │   ├── seed.sql                     plans, permissions, 20 built-in roles, demo DAV org with 3 branches
-│   └── migrations/                  changes for databases created earlier (002–010, applied by migrate.ps1)
+│   └── migrations/                  changes for databases created earlier (002–012, applied by migrate.ps1)
 ├── scripts/seed-demo.ts             demo users, teachers, students, parents (+ a 2nd org, Greenfield)
 ├── scripts/import-frontend-demo.ts  builds a 3rd org, Greenwood, from scripts/demo-data/greenwood.json (dates moved to today)
 ├── scripts/seed-procurement-demo.ts purchasing demo for Greenwood, created through the API
@@ -93,6 +93,7 @@ check who may do what, and remove the data they create:
 | `npm run test:facilities` | library (fines), inventory (stock), transport (drivers, stops), hostel (rooms, outpasses) — 37 |
 | `npm run test:procurement` | the whole purchase flow, PR numbering, store reorders, accounts status of POs — 38 |
 | `npm run test:hrms` | CTC & statutory rules, recruitment → offer → joining → onboarding, staff attendance, claims, payroll & payslips, compliance, training tests & MIS, exit with full & final, vendor codes, stock analysis — 77 |
+| `npm run test:group` | head-office and region-office roles, who may open the group dashboard, scope per region, totals (after `npm run seed:group`) — 27 |
 
 `npm run test:db` runs 21 checks as the API login: organization isolation (read, insert, update, move),
 that the login cannot alter tables or the security policy, foreign keys / checks / unique rules,
@@ -109,6 +110,7 @@ npm run seed:demo           # optional: demo users and students (DAV + Greenfiel
 npm run import:frontend     # optional: the demo school "greenwood" (the one the frontend and /school show)
 npm run seed:procurement    # optional: purchasing demo for "greenwood" (through the API)
 npm run seed:hr             # optional: trainings (slides + tests) and an expense claim for "greenwood"
+npm run seed:group          # optional: "greenwood" becomes a 3-school group (2 regions) with head-office sign-ins
 npm run dev                 # http://localhost:4000/api/v1
 ```
 
@@ -175,6 +177,7 @@ in one branch. Errors are always `{ code, message, details? }`.
 | Facilities | `GET /library` · `POST /library/books` · `PATCH/DELETE /library/books/:id` · `POST /library/loans` · `POST /library/loans/:id/return` · `GET/POST /inventory/items` · `PATCH/DELETE /inventory/items/:id` · `POST /inventory/items/:id/movements` · `GET /inventory/movements` · `GET /inventory/analysis?months=` · `GET/PUT /inventory/settings` · `GET /transport` · `POST/PATCH/DELETE /transport/{vehicles,routes}` · `GET /hostel` · `POST /hostel/allocations` · `POST /hostel/residents/:studentId/vacate` · `POST /hostel/outpasses` · `PATCH /hostel/outpasses/:id` |
 | Procurement | `GET/POST /procurement/indents` · `POST /procurement/indents/:id/{hod,store-check,principal,management,cancel,issue}` · `GET/POST /procurement/indents/:id/quotations` · `GET /procurement/quotations` · `DELETE /procurement/quotations/:id` · `POST /procurement/indents/:id/purchase-order` · `GET /procurement/purchase-orders` · `POST /procurement/purchase-orders/:id/{receipts,cancel}` · `GET /procurement/receipts` · `GET/POST/PUT /procurement/vendors` · `GET/PUT /procurement/settings` |
 | Payables | `GET/POST /payables/bills` · `POST /payables/bills/:id/{decision,pay}` · `GET /payables/payments` · `GET /petty-cash` · `POST /petty-cash/{spend,top-up}` |
+| Group office | `GET /group/overview` (schools in scope side by side, group and region totals; needs `group.view`) |
 | Users & roles | `GET/POST /users` · `GET/PATCH /users/:id` · `POST /users/:id/reset-password` · `POST/DELETE /users/:id/memberships` · `GET/POST /roles` · `PUT /roles/:id/permissions` · `GET /permissions` |
 
 ### How access works

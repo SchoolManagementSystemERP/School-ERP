@@ -11,8 +11,8 @@ import { studentStore } from "./students";
 import { teacherStore } from "./teachers";
 import { timetableStore } from "./timetable";
 
-export { ROLE_ACCOUNTS, currentRole, signIn, signOut, ensureSession, changePassword, switchBranch, can, authStore, lastOrganization } from "./auth";
-export type { Role } from "./auth";
+export { ROLE_ACCOUNTS, currentRole, signIn, signOut, ensureSession, changePassword, switchBranch, can, authStore, lastOrganization, LOGIN_PATH, LOGIN_LEVEL_LABEL, lastLoginPath } from "./auth";
+export type { Role, LoginLevel } from "./auth";
 
 /** Kept for older call sites: 0 means "the first one in the list". */
 export const DEFAULT_STUDENT_ID = 0;

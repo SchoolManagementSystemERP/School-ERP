@@ -9,7 +9,7 @@ import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
 import { cn } from "@/components/ui/utils";
 import { currentAcademicYear } from "@/store/classes";
 import { clearAllStores } from "@/store/remote";
-import { authStore, logout } from "@/store/session";
+import { authStore, lastLoginPath, logout } from "@/store/session";
 
 export interface NavItem {
   name: string;
@@ -135,7 +135,7 @@ export function AppShell({ portal, home, nav: portalNav, user: shown, setup, hea
               variant="ghost"
               size="icon"
               className="shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={async () => { await logout(); clearAllStores(); navigate("/login"); }}
+              onClick={async () => { await logout(); clearAllStores(); navigate(lastLoginPath()); }}
               aria-label="Logout"
               title="Logout"
             >

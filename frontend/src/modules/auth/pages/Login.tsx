@@ -3,14 +3,40 @@ import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { EducationBackground } from "@/components/common/EducationBackground";
 import { ApiError, errorMessage } from "@/api/client";
-import { ROLE_ACCOUNTS, changePassword, lastOrganization, signIn, type Role } from "@/store/session";
+import { LOGIN_LEVEL_LABEL, LOGIN_PATH, ROLE_ACCOUNTS, changePassword, lastOrganization, signIn, signOut, type LoginLevel, type Role } from "@/store/session";
 
-/** Demo accounts in the database (backend: npm run import:frontend), all with the password Demo@1234. */
+/** Demo accounts in the database (backend: npm run import:frontend + npm run seed:group), all with the password Demo@1234. */
 const DEMO_PASSWORD = "Demo@1234";
-const DEMO_USERS: Record<Role, string> = {
-  admin: "admin", principal: "principal", viceprincipal: "viceprincipal", teacher: "T001", student: "ADM-2025-1001", parent: "9876511111",
-  accountant: "accountant", reception: "reception", exams: "exams", transport: "transport", warden: "warden", hr: "hr", librarian: "librarian", inventory: "inventory",
+
+/** What each sign-in page is for, its colours and its demo accounts (school "greenwood"). */
+const LEVELS: Record<LoginLevel, { title: string; sub: string; colors: [string, string]; demoLabel: string; demo: { label: string; username: string }[] }> = {
+  school: {
+    title: "School Login", sub: "Principal, teachers, office staff, students and parents", colors: ["#6366f1", "#8b5cf6"],
+    demoLabel: 'Demo school "greenwood" (Gomti Nagar) — click to autofill',
+    demo: [
+      ["principal", "principal"], ["viceprincipal", "viceprincipal"], ["teacher", "T001"], ["student", "ADM-2025-1001"], ["parent", "9876511111"],
+      ["accountant", "accountant"], ["reception", "reception"], ["exams", "exams"], ["transport", "transport"], ["warden", "warden"], ["hr", "hr"],
+      ["librarian", "librarian"], ["inventory", "inventory"],
+    ].map(([label, username]) => ({ label, username })),
+  },
+  region: {
+    title: "Region Office Login", sub: "The regional office — only the schools of your region", colors: ["#0d9488", "#0284c7"],
+    demoLabel: 'Demo "greenwood": Lucknow region office (cluster.head: Kanpur)',
+    demo: [
+      "regional.manager", "lko.asst.director", "lko.academic", "lko.subject", "lko.exams", "lko.inspector", "lko.training", "lko.counselling", "lko.accounts",
+      "lko.auditor", "lko.hr", "lko.admissions", "lko.purchase", "lko.transport", "lko.infra", "lko.it", "lko.sports", "lko.pr", "lko.office", "cluster.head",
+    ].map((u) => ({ label: u, username: u })),
+  },
+  head: {
+    title: "Head Office Login", sub: "Trust and management — every school of the group", colors: ["#b45309", "#d97706"],
+    demoLabel: 'Demo "greenwood" trust — all 3 schools',
+    demo: [
+      "chairman", "director", "secretary", "treasurer", "trustee", "admin", "it.head", "academic.head", "finance.head", "hr.head", "admissions.head",
+      "purchase.head", "compliance", "auditor", "inspection", "transport.head", "marketing", "training",
+    ].map((u) => ({ label: u, username: u })),
+  },
 };
+const LEVEL_ORDER: LoginLevel[] = ["school", "region", "head"];
 
 /* ── Floating orb data ── */
 const ORBS = [
@@ -35,9 +61,13 @@ interface Particle {
 
 const PARTICLE_COLORS = ["#a5b4fc", "#c4b5fd", "#93c5fd", "#e0e7ff", "#ddd6fe"];
 
-export function Login() {
+/** A sign-in page for one level: the school's people, a region office, or the head office. */
+export function Login({ level = "school" }: { level?: LoginLevel }) {
   const navigate  = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const page = LEVELS[level];
+  /** Signed in on the wrong page: the page this account belongs to. */
+  const [wrongLevel, setWrongLevel] = useState<LoginLevel | null>(null);
 
   const [organization, setOrganization] = useState(lastOrganization);
   const [newPassword, setNewPassword] = useState("");
@@ -130,7 +160,7 @@ export function Login() {
     };
   }, []);
 
-  function clearError() { setFieldError({ field: null, message: "" }); }
+  function clearError() { setFieldError({ field: null, message: "" }); setWrongLevel(null); }
 
   function go(role: Role | null, name: string) {
     if (!role) { setFieldError({ field: "username", message: "This account has no portal yet. Ask the administrator to give it a role." }); return; }
@@ -159,6 +189,13 @@ export function Login() {
     setSubmitting(true);
     try {
       const res = await signIn(organization, username, password);
+      if (res.level !== level) {
+        // the account is right, the door is not: sign out again and point to the right page
+        await signOut();
+        setWrongLevel(res.level);
+        setFieldError({ field: "username", message: `This is a ${LOGIN_LEVEL_LABEL[res.level]} account. Please use the ${LOGIN_LEVEL_LABEL[res.level]} login.` });
+        return;
+      }
       if (res.mustChangePassword) { setMustChange(res.role); toast.message("Please choose a new password to continue."); return; }
       go(res.role, res.name);
     } catch (err) {
@@ -263,16 +300,16 @@ export function Login() {
           height: 64px;
           margin: 0 auto 1.5rem;
           border-radius: 50%;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          background: linear-gradient(135deg, var(--a1), var(--a2));
           display: flex;
           align-items: center;
           justify-content: center;
-          box-shadow: 0 0 0 8px rgba(99,102,241,0.12), 0 0 30px rgba(99,102,241,0.35);
+          box-shadow: 0 0 0 8px color-mix(in srgb, var(--a1) 12%, transparent), 0 0 30px color-mix(in srgb, var(--a1) 35%, transparent);
           animation: pulse-ring 3s ease-in-out infinite;
         }
         @keyframes pulse-ring {
-          0%, 100% { box-shadow: 0 0 0 8px rgba(99,102,241,0.12), 0 0 30px rgba(99,102,241,0.35); }
-          50%       { box-shadow: 0 0 0 14px rgba(99,102,241,0.06), 0 0 50px rgba(99,102,241,0.5); }
+          0%, 100% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--a1) 12%, transparent), 0 0 30px color-mix(in srgb, var(--a1) 35%, transparent); }
+          50%       { box-shadow: 0 0 0 14px color-mix(in srgb, var(--a1) 6%, transparent), 0 0 50px color-mix(in srgb, var(--a1) 50%, transparent); }
         }
 
         .icon-ring svg { width: 28px; height: 28px; color: #fff; }
@@ -402,19 +439,26 @@ export function Login() {
         .chip {
           padding: 3px 12px;
           border-radius: 20px;
-          background: rgba(99,102,241,0.12);
-          border: 1px solid rgba(99,102,241,0.25);
-          color: #a5b4fc;
+          background: color-mix(in srgb, var(--a1) 14%, transparent);
+          border: 1px solid color-mix(in srgb, var(--a1) 35%, transparent);
+          color: color-mix(in srgb, var(--a2) 40%, #fff);
           font-size: 0.78rem;
           font-family: 'Outfit', sans-serif;
           cursor: pointer;
           transition: background 0.2s, transform 0.15s;
         }
         .chip:hover {
-          background: rgba(99,102,241,0.25);
+          background: color-mix(in srgb, var(--a1) 30%, transparent);
           transform: translateY(-1px);
         }
         .chip:active { transform: scale(0.96); }
+
+        /* ── level tabs ── */
+        .level-tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 1.5rem; border-radius: 12px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); }
+        .level-tab { flex: 1; text-align: center; padding: 7px 4px; border-radius: 9px; font-size: 0.78rem; font-weight: 600; color: rgba(255,255,255,0.55); text-decoration: none; transition: background 0.2s, color 0.2s; }
+        .level-tab:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .level-tab.active { color: #fff; background: linear-gradient(135deg, var(--a1), var(--a2)); box-shadow: 0 4px 14px color-mix(in srgb, var(--a1) 35%, transparent); }
+        .wrong-level { display: inline-block; margin-top: 6px; font-size: 0.8rem; font-weight: 600; color: #fff; padding: 5px 12px; border-radius: 999px; background: linear-gradient(135deg, var(--a1), var(--a2)); text-decoration: none; }
 
         /* ── submit button ── */
         .submit-btn {
@@ -422,7 +466,7 @@ export function Login() {
           padding: 0.85rem;
           border: none;
           border-radius: 12px;
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          background: linear-gradient(135deg, var(--a1), var(--a2));
           color: #fff;
           font-family: 'Outfit', sans-serif;
           font-size: 1rem;
@@ -535,19 +579,30 @@ export function Login() {
         <Link to="/" className="back-home">← SchoolERP home</Link>
 
         {/* card */}
-        <div className={`glass-card${mounted ? " mounted" : ""}`}>
+        <div className={`glass-card${mounted ? " mounted" : ""}`} style={{ "--a1": page.colors[0], "--a2": page.colors[1] } as React.CSSProperties}>
+
+          {/* which door: school, region office, head office */}
+          <nav className="level-tabs" aria-label="Sign-in pages">
+            {LEVEL_ORDER.map((l) => (
+              <Link key={l} to={LOGIN_PATH[l]} className={`level-tab${l === level ? " active" : ""}`} aria-current={l === level ? "page" : undefined}>
+                {LOGIN_LEVEL_LABEL[l]}
+              </Link>
+            ))}
+          </nav>
 
           {/* icon */}
-          <div className="icon-ring">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-              <polyline points="10 17 15 12 10 7"/>
-              <line x1="15" y1="12" x2="3" y2="12"/>
-            </svg>
+          <div className="icon-ring" aria-hidden>
+            {level === "school" ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+            ) : level === "region" ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 22h18"/><path d="M6 18v-7"/><path d="M10 18v-7"/><path d="M14 18v-7"/><path d="M18 18v-7"/><path d="m12 2 8 5H4z"/></svg>
+            )}
           </div>
 
-          <h1 className="card-title">Welcome back</h1>
-          <p className="card-sub">Sign in to continue</p>
+          <h1 className="card-title">{page.title}</h1>
+          <p className="card-sub">{page.sub}</p>
 
           <form onSubmit={onSubmit}>
             {/* school code */}
@@ -584,6 +639,7 @@ export function Login() {
                   {fieldError.message}
                 </p>
               )}
+              {wrongLevel && <Link to={LOGIN_PATH[wrongLevel]} className="wrong-level">Go to the {LOGIN_LEVEL_LABEL[wrongLevel]} login →</Link>}
             </div>
 
             {/* password */}
@@ -637,16 +693,16 @@ export function Login() {
 
             {/* demo credentials */}
             <div className="demo-box">
-              <p className="demo-label">Demo school "greenwood" — click to autofill</p>
+              <p className="demo-label">{page.demoLabel}</p>
               <div className="chips">
-                {(Object.keys(DEMO_USERS) as Role[]).map(role => (
+                {page.demo.map(({ label, username: user }) => (
                   <button
-                    key={role}
+                    key={label}
                     type="button"
                     className="chip"
-                    onClick={() => { setOrganization("greenwood"); setUsername(DEMO_USERS[role]); setPassword(DEMO_PASSWORD); setMustChange(null); clearError(); }}
+                    onClick={() => { setOrganization("greenwood"); setUsername(user); setPassword(DEMO_PASSWORD); setMustChange(null); clearError(); }}
                   >
-                    {role}
+                    {label}
                   </button>
                 ))}
               </div>

@@ -4,6 +4,7 @@ import { AccountantLayout } from "@/components/layout/AccountantLayout";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ExamsLayout } from "@/components/layout/ExamsLayout";
 import { HostelLayout } from "@/components/layout/HostelLayout";
+import { GroupLayout } from "@/components/layout/GroupLayout";
 import { HRLayout } from "@/components/layout/HRLayout";
 import { InventoryLayout } from "@/components/layout/InventoryLayout";
 import { LibrarianLayout } from "@/components/layout/LibrarianLayout";
@@ -40,7 +41,7 @@ import { outpassStore, residentStore, roomStore } from "@/store/hostel";
 import { procurementStores } from "@/store/procurement";
 import { permissionStore, roleStore, userStore } from "@/store/users";
 import { leaveStore, payrollStore, staffStore } from "@/store/hr";
-import { currentRole, ensureSession, type Role } from "@/store/session";
+import { currentRole, ensureSession, lastLoginPath, type Role } from "@/store/session";
 import { studentStore } from "@/store/students";
 import { teacherStore } from "@/store/teachers";
 
@@ -57,7 +58,9 @@ function page<M extends Record<string, unknown>>(load: () => Promise<M>, name: k
  * loads the data every portal needs. Teachers first, so class-teacher names resolve.
  */
 const requireRole = (role: Role) => async () => {
-  if (!(await ensureSession()) || currentRole() !== role) throw redirect("/login");
+  if (!(await ensureSession()) || currentRole() !== role) throw redirect(lastLoginPath());
+  // the group office reads its own totals (GET /group/overview), not one school's records
+  if (role === "group") return null;
   try {
     await preload([teacherStore]);
     await preload([gradeStore, sectionStore, studentStore, subjectStore, timetableStore, examStore]);
@@ -138,6 +141,7 @@ const compliance = page(() => import("@/modules/hr/pages/Compliance"), "Complian
 const expenseClaims = page(() => import("@/modules/hr/pages/ExpenseClaims"), "ExpenseClaims");
 /** Employee self-service — every staff portal has it. */
 const myHr = { path: "my-hr", ...page(() => import("@/modules/hr/pages/MyHr"), "MyHr") };
+const groupDashboard = page(() => import("@/modules/group/pages/GroupDashboard"), "GroupDashboard");
 
 const site = (name: string) => page(() => import("@/modules/website/pages/SiteInfoPages"), name as "SiteAbout");
 
@@ -167,7 +171,10 @@ export const router = createBrowserRouter([
     ],
   },
 
-  { path: "/login", Component: Login },
+  // three sign-in pages: a school's people, a region office, the head office
+  { path: "/login", Component: () => <Login level="school" /> },
+  { path: "/login/region", Component: () => <Login level="region" /> },
+  { path: "/login/head-office", Component: () => <Login level="head" /> },
   { path: "/role-select", ...page(() => import("@/modules/auth/pages/RoleSelector"), "RoleSelector") },
 
   // ── Leadership ─────────────────────────────────────────────────────────────
@@ -222,6 +229,14 @@ export const router = createBrowserRouter([
     { path: "system", ...page(() => import("@/modules/admin/pages/SystemSettings"), "SystemSettings") },
     { path: "website", ...page(() => import("@/modules/admin/pages/WebsiteSettings"), "WebsiteSettings") },
     { path: "purchase-approvals", ...page(() => import("@/modules/procurement/pages/PurchaseApprovals"), "ManagementPurchaseApprovals") },
+    { path: "group", ...groupDashboard },
+  ]),
+
+  // ── Group office: chairman, trust, group heads, regional / cluster heads ──
+  portal("/group", "group", GroupLayout, [
+    { index: true, ...groupDashboard },
+    { path: "purchase-approvals", ...page(() => import("@/modules/procurement/pages/PurchaseApprovals"), "ManagementPurchaseApprovals") },
+    myHr,
   ]),
 
   // ── Teaching ───────────────────────────────────────────────────────────────
