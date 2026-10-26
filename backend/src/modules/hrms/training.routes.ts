@@ -4,7 +4,7 @@ import { targetBranch } from '../../auth/access.js';
 import { withTenant, type Tx } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 import { assertHr, canManageHr, hrBranches, ownStaff, todayUtc } from './common.js';
 
@@ -117,7 +117,7 @@ trainingRouter.post('/trainings', async (req, res) => {
 trainingRouter.patch('/trainings/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = trainingInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(trainingInput.omit({ branchId: true })).parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const t = await trainingOrThrow(tx, id);
     assertHr(ctx, t.branchId);

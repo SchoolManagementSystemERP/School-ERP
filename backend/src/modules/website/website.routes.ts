@@ -5,7 +5,7 @@ import { targetBranch } from '../../auth/access.js';
 import { withTenant } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 
 /**
@@ -33,7 +33,7 @@ websiteRouter.get('/website', async (req, res) => {
 websiteRouter.put('/website', async (req, res) => {
   const ctx = ctxOf(req);
   if (!ctx.access.can('org.manage')) throw forbidden();
-  const site = z.record(z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
+  const site = z.record(z.string(), z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
   if (typeof site.name !== 'string' || !site.name.trim()) throw badRequest('The school name is required.');
   await withTenant(ctx.organizationId, async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { settings: true } });
@@ -122,7 +122,7 @@ websiteRouter.post('/jobs', async (req, res) => {
 websiteRouter.patch('/jobs/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = jobInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(jobInput.omit({ branchId: true })).parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.jobOpening.findUnique({ where: { id } });
     if (!before) throw notFound('Job opening');

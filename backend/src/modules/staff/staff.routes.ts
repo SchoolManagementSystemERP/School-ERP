@@ -12,7 +12,7 @@ import { withTenant } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
 import { decryptJson, encryptJson, mergeEncrypted } from '../../lib/crypto.js';
 import { conflict, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 import { PASSWORD_ROUNDS } from '../auth/auth.routes.js';
 
@@ -74,8 +74,8 @@ const staffInput = z.object({
   joiningDate: dateOnly.nullable().optional(),
   status: z.enum(['ACTIVE', 'ON_LEAVE', 'SUSPENDED', 'RESIGNED']).default('ACTIVE'),
   basicSalary: z.number().min(0).max(10_000_000).nullable().optional(),
-  allowances: z.record(z.number().min(0).nullable()).nullable().optional(),
-  profile: z.record(z.unknown()).nullable().optional(),
+  allowances: z.record(z.string(), z.number().min(0).nullable()).nullable().optional(),
+  profile: z.record(z.string(), z.unknown()).nullable().optional(),
   /** Aadhaar / PAN — stored encrypted. */
   sensitive: z.object({ aadhaar: z.string().regex(/^\d{12}$/).nullable().optional(), pan: z.string().toUpperCase().regex(/^[A-Z]{5}\d{4}[A-Z]$/).nullable().optional() }).partial().optional(),
   bank: z.object({ bankName: z.string().max(100).optional(), accountNo: z.string().max(30).optional(), ifsc: z.string().max(11).optional(), branch: z.string().max(100).optional(), type: z.string().max(30).optional() }).optional(),
@@ -119,7 +119,7 @@ staffRouter.post('/staff', async (req, res) => {
 staffRouter.patch('/staff/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = staffInput.omit({ createLogin: true, branchId: true }).partial().parse(req.body);
+  const body = forPatch(staffInput.omit({ createLogin: true, branchId: true })).parse(req.body);
   const { sensitive, bank, allowances, profile, ...cols } = body;
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.staff.findUnique({ where: { id } });

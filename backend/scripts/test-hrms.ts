@@ -160,7 +160,9 @@ async function main() {
   ok(tr.status === 201 && tr.body.slides.length === 2, "HR creates a training with its presentation", tr.body);
   const trId: string = tr.body.id;
   created.trainingIds.push(trId);
-  const qs = await call(hr, "PUT", `/trainings/${trId}/questions`, { questions: [
+  const renamed = await call(hr, "PATCH", `/trainings/${trId}`, { venue: "Online — school meet link" });
+  ok(renamed.status === 200 && renamed.body.slides.length === 2 && renamed.body.passPercent === 60, "a PATCH changes only what it sends (slides and pass mark untouched)", renamed.body);
+  const qs =await call(hr, "PUT", `/trainings/${trId}/questions`, { questions: [
     { question: "Who must report a safety concern?", options: ["Only the principal", "Every adult in school"], answerIndex: 1 },
     { question: "When should a concern be reported?", options: ["The same day", "At the end of term"], answerIndex: 0 },
   ] });

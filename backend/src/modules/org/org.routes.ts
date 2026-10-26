@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { withTenant } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { ctxOf, requireOrg } from '../../middleware/authenticate.js';
 
 export const orgRouter = Router();
@@ -72,7 +72,7 @@ const orgUpdate = z.object({
   contactEmail: z.string().trim().email().max(200).optional(),
   contactPhone: z.string().trim().min(6).max(20).optional(),
   logoUrl: z.string().url().max(500).nullable().optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 /** PUT /org — needs org.manage. */
@@ -155,7 +155,7 @@ orgRouter.post('/branches', requireOrg('org.manage'), async (req, res) => {
 orgRouter.patch('/branches/:id', requireOrg('org.manage'), async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = branchBody.partial().parse(req.body);
+  const body = forPatch(branchBody).parse(req.body);
   const branch = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.branch.findUnique({ where: { id }, select: branchSelect });
     if (!before) throw notFound('Branch');

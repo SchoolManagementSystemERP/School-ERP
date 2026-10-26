@@ -17,7 +17,7 @@ generator client {
 
 datasource db {
   provider = "sqlserver"
-  url      = env("DATABASE_URL")
+  // the connection URL is in prisma.config.ts (CLI) and src/db/prisma.ts (adapter)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
