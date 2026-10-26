@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import { PrismaMssql } from '@prisma/adapter-mssql';
 import { Prisma, PrismaClient } from '@prisma/client';
 
 /**
@@ -7,6 +9,8 @@ import { Prisma, PrismaClient } from '@prisma/client';
  * RefreshToken) and health checks use this client as is.
  */
 export const prisma = new PrismaClient({
+  // Prisma 7 talks to SQL Server through the mssql driver; it reads the same sqlserver:// URL
+  adapter: new PrismaMssql(process.env.DATABASE_URL ?? ''),
   log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
 });
 

@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { Router, type CookieOptions, type Request, type Response } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { hashRefreshToken, newRefreshToken, signAccessToken, ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_DAYS } from '../../auth/tokens.js';
 import { env } from '../../config/env.js';
@@ -45,7 +45,8 @@ const accountLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => `${req.ip}|${String(req.body?.organization ?? '').toLowerCase()}|${String(req.body?.username ?? '').toLowerCase()}`,
+  // ipKeyGenerator groups an IPv6 address by its /56 subnet, so one client cannot rotate addresses
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip ?? '')}|${String(req.body?.organization ?? '').toLowerCase()}|${String(req.body?.username ?? '').toLowerCase()}`,
   message: tooMany,
 });
 /** Many accounts from one address (a whole school may share one internet connection, so this is generous). */

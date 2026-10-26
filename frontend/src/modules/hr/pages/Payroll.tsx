@@ -4,9 +4,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { CheckCircle2, Download, Play, Users, Wallet } from "lucide-react";
+import { CheckCircle2, Download, FileText, Landmark, Play, Users, Wallet } from "lucide-react";
+import { Link, useLocation } from "react-router";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
+import { PayslipDialog } from "@/components/hr/PayslipDialog";
 import { StatCard } from "@/components/common/StatCard";
 import { inr, monthLabel, monthOf } from "@/store/finance";
 import { markPayrollPaid, processPayroll, usePayroll } from "@/store/hr";
@@ -18,6 +20,9 @@ export function Payroll() {
   const current = monthOf();
   const [month, setMonth] = useState(runs.some((r) => r.month === current) ? current : runs.at(-1)?.month ?? current);
   const run = runs.find((r) => r.month === month);
+  const [slip, setSlip] = useState<string | null>(null);
+  // the page is shared by the HR and Accounts portals
+  const base = "/" + (useLocation().pathname.split("/")[1] || "hr");
   const months = [...new Set([...runs.map((r) => r.month), current])].sort().reverse();
 
   const gross = run?.lines.reduce((a, l) => a + l.gross, 0) ?? 0;
@@ -33,7 +38,7 @@ export function Payroll() {
     <div className="space-y-6">
       <PageHeader
         title="Payroll"
-        description="Monthly salaries for teaching and non-teaching staff (PF 12% of basic + ₹200 professional tax)"
+        description="Monthly salaries from each employee's structure — loss of pay from the attendance register, approved expense claims added, PF / ESI / PT / TDS deducted"
         actions={
           <Select value={month} onValueChange={setMonth}>
             <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
@@ -53,6 +58,9 @@ export function Payroll() {
         <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
           <CardTitle className="text-base">{monthLabel(month)}</CardTitle>
           <div className="flex flex-wrap gap-2">
+            {run && (
+              <Button variant="outline" size="sm" className="gap-1" asChild><Link to={`${base}/compliance?month=${month}`}><Landmark className="h-4 w-4" /> PF / ESI / TDS</Link></Button>
+            )}
             {run && (
               <Button variant="outline" size="sm" className="gap-1" onClick={() => downloadCsv(`payroll-${month}.csv`, ["Emp ID", "Name", "Designation", "Gross", "Deductions", "Net"], run.lines.map((l) => [l.empId, l.name, l.designation, l.gross, l.deductions, l.net]))}>
                 <Download className="h-4 w-4" /> CSV
@@ -85,6 +93,7 @@ export function Payroll() {
                   <TableHead className="text-right">Gross</TableHead>
                   <TableHead className="text-right">Deductions</TableHead>
                   <TableHead className="text-right">Net</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -97,6 +106,7 @@ export function Payroll() {
                     <TableCell className="text-right">{inr(l.gross)}</TableCell>
                     <TableCell className="text-right text-red-600">−{inr(l.deductions)}</TableCell>
                     <TableCell className="text-right font-semibold">{inr(l.net)}</TableCell>
+                    <TableCell className="text-right">{l.payslipId && <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={() => setSlip(l.payslipId!)}><FileText className="h-3.5 w-3.5" /> Payslip</Button>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -104,6 +114,7 @@ export function Payroll() {
           )}
         </CardContent>
       </Card>
+      {slip && <PayslipDialog id={slip} onClose={() => setSlip(null)} />}
     </div>
   );
 }

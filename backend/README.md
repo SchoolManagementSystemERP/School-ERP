@@ -87,6 +87,7 @@ check who may do what, and remove the data they create:
 | `npm run test:website` | public pages and forms, enquiries, visitors, careers, website profile — 35 |
 | `npm run test:facilities` | library (fines), inventory (stock), transport (drivers, stops), hostel (rooms, outpasses) — 37 |
 | `npm run test:procurement` | the whole purchase flow — 34 |
+| `npm run test:hrms` | CTC & statutory rules, recruitment → offer → joining → onboarding, staff attendance, claims, payroll & payslips, compliance, training tests & MIS, exit with full & final, vendor codes, stock analysis — 76 |
 
 `npm run test:db` runs 21 checks as the API login: organization isolation (read, insert, update, move),
 that the login cannot alter tables or the security policy, foreign keys / checks / unique rules,
@@ -102,6 +103,7 @@ npx prisma generate
 npm run seed:demo           # optional: demo users and students (DAV + Greenfield)
 npm run import:frontend     # optional: the demo school "greenwood" (the one the frontend and /school show)
 npm run seed:procurement    # optional: purchasing demo for "greenwood" (through the API)
+npm run seed:hr             # optional: trainings (slides + tests) and an expense claim for "greenwood"
 npm run dev                 # http://localhost:4000/api/v1
 ```
 
@@ -153,11 +155,15 @@ in one branch. Errors are always `{ code, message, details? }`.
 | Staff | `GET /staff?type=&status=` · `POST /staff` · `PATCH /staff/:id` |
 | Academics | `GET/POST /subjects` · `GET /timetable` · `PUT /timetable/sections/:id` · `GET/PUT /attendance` · `GET/POST /exams` · `PATCH/DELETE /exams/:id` · `GET/PUT /marks` · `GET /marks/ranks` · `GET/POST /assignments` · `DELETE /assignments/:id` · `POST /assignments/:id/submissions` · `PATCH /assignments/:id/submissions/:studentId` · `GET/POST /notes` · `DELETE /notes/:id` · `POST /notes/:id/download` |
 | Fees & expenses | `GET /fees/structure` · `PUT /fees/structure/:gradeId` · `GET /fees/accounts` · `GET/POST /fees/payments` (Idempotency-Key) · `GET/POST /expenses` · `DELETE /expenses/:id` |
-| Leave & payroll | `GET/POST /leaves` · `PATCH /leaves/:id` · `GET /payroll` · `POST /payroll/:month/{process,pay}` |
+| Leave & payroll | `GET/POST /leaves` · `PATCH /leaves/:id` · `GET /payroll` · `POST /payroll/:month/{process,pay}` · `GET /payroll/:month/compliance` · `GET /payslips/:id` · `GET /me/payslips` |
+| HR operations | `GET/PUT /hr/settings` · `POST /hr/ctc/preview` · `GET/PUT /staff/:id/compensation` · `PATCH /staff/:id/bgv` · `GET /onboarding` · `POST /staff/:id/onboarding` · `PATCH /onboarding/:taskId` · `GET/PUT /staff-attendance` · `GET /me/attendance` · `GET /leave-balances` · `GET/POST /expense-claims` · `PATCH /expense-claims/:id` (`?mine=1` on lists = only your own) |
+| Recruitment | `POST /job-applications` · `GET /interviews` · `POST /job-applications/:id/interviews` · `PATCH /interviews/:id` · `GET /offers` · `POST /job-applications/:id/offer` · `PATCH /offers/:id` · `POST /offers/:id/join` |
+| Training | `GET/POST /trainings` · `GET/PATCH /trainings/:id` · `PUT /trainings/:id/questions` · `POST /trainings/:id/{enroll,attendance,test,feedback}` · `DELETE /trainings/:id/enroll/:staffId` · `GET /trainings-mis` |
+| Exit | `GET/POST /separations` · `PATCH /separations/:id` · `PUT /separations/:id/{exit-interview,handover}` · `POST /separations/:id/{fnf,settle}` · `GET /separations/:id/documents` |
 | Communication | `GET/POST /announcements` · `DELETE /announcements/:id` · `GET/POST /messages` (`?scope=school` for principals) · `POST /messages/:id/read` |
 | Website & front office | `GET/PUT /website` · `GET /website/messages` · `PATCH /website/messages/:id` · `GET /website/alumni` · `GET/POST /jobs` · `PATCH /jobs/:id` · `GET /job-applications` · `PATCH /job-applications/:id` · `GET/POST /enquiries` · `PATCH /enquiries/:id` · `GET/POST /visitors` · `POST /visitors/:id/checkout` |
 | Public (no sign-in) | `GET /public/:school/{site,announcements,exams,fees,faculty,jobs}` · `POST /public/:school/{enquiries,applications,contact,alumni}` · `POST /public/demo-requests` (forms are rate-limited) |
-| Facilities | `GET /library` · `POST /library/books` · `PATCH/DELETE /library/books/:id` · `POST /library/loans` · `POST /library/loans/:id/return` · `GET/POST /inventory/items` · `PATCH/DELETE /inventory/items/:id` · `POST /inventory/items/:id/movements` · `GET /inventory/movements` · `GET/PUT /inventory/settings` · `GET /transport` · `POST/PATCH/DELETE /transport/{vehicles,routes}` · `GET /hostel` · `POST /hostel/allocations` · `POST /hostel/residents/:studentId/vacate` · `POST /hostel/outpasses` · `PATCH /hostel/outpasses/:id` |
+| Facilities | `GET /library` · `POST /library/books` · `PATCH/DELETE /library/books/:id` · `POST /library/loans` · `POST /library/loans/:id/return` · `GET/POST /inventory/items` · `PATCH/DELETE /inventory/items/:id` · `POST /inventory/items/:id/movements` · `GET /inventory/movements` · `GET /inventory/analysis?months=` · `GET/PUT /inventory/settings` · `GET /transport` · `POST/PATCH/DELETE /transport/{vehicles,routes}` · `GET /hostel` · `POST /hostel/allocations` · `POST /hostel/residents/:studentId/vacate` · `POST /hostel/outpasses` · `PATCH /hostel/outpasses/:id` |
 | Procurement | `GET/POST /procurement/indents` · `POST /procurement/indents/:id/{hod,store-check,principal,management,cancel,issue}` · `GET/POST /procurement/indents/:id/quotations` · `GET /procurement/quotations` · `DELETE /procurement/quotations/:id` · `POST /procurement/indents/:id/purchase-order` · `GET /procurement/purchase-orders` · `POST /procurement/purchase-orders/:id/{receipts,cancel}` · `GET /procurement/receipts` · `GET/POST/PUT /procurement/vendors` · `GET/PUT /procurement/settings` |
 | Payables | `GET/POST /payables/bills` · `POST /payables/bills/:id/{decision,pay}` · `GET /payables/payments` · `GET /petty-cash` · `POST /petty-cash/{spend,top-up}` |
 | Users & roles | `GET/POST /users` · `GET/PATCH /users/:id` · `POST /users/:id/reset-password` · `POST/DELETE /users/:id/memberships` · `GET/POST /roles` · `PUT /roles/:id/permissions` · `GET /permissions` |
@@ -181,11 +187,15 @@ Edit `prisma/schema.prisma`, then regenerate the SQL so both stay in sync:
 
 ```bash
 npx prisma validate
-npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > database/schema.sql
+npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script > database/schema.sql
 ```
 
-Then write the change as `database/migrations/NNN-name.sql` (`npx prisma migrate diff --from-schema-datamodel <old> --to-schema-datamodel prisma/schema.prisma --script`),
-run `node scripts/gen-constraints.mjs` and `databasemigrate.ps1`. Every new table with an `organizationId`
+Then write the change as `database/migrations/NNN-name.sql` (`npx prisma migrate diff --from-schema <old> --to-schema prisma/schema.prisma --script`),
+run `node scripts/gen-constraints.mjs` and `database/migrate.ps1`.
+
+Prisma 7: the connection URL is no longer in `schema.prisma` — the CLI reads `DATABASE_URL` through
+`prisma.config.ts`, and the API connects with the SQL Server driver adapter (`@prisma/adapter-mssql`) in
+`src/db/prisma.ts`. Every new table with an `organizationId`
 column must be added to `database/row-level-security.sql` and, for existing databases, in the migration.
 An optional column that must be unique when set goes in `database/filtered-unique-indexes.sql`
 (not `@unique`: SQL Server allows only one NULL in a unique constraint).

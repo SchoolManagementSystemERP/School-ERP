@@ -26,7 +26,18 @@ export const dateOnly = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
   .transform((s) => new Date(`${s}T00:00:00Z`));
 
-export const toDateString = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+type WithoutDefault<T> = T extends z.ZodDefault<infer Inner> ? Inner : T;
+
+/**
+ * The body of a PATCH: every field optional and none defaulted. (Zod 4 applies `.default()` even inside
+ * `.partial()`, which would quietly reset the fields a PATCH did not send.)
+ */
+export function forPatch<S extends z.ZodRawShape>(schema: z.ZodObject<S>) {
+  const shape = Object.fromEntries(Object.entries(schema.shape).map(([k, v]) => [k, v instanceof z.ZodDefault ? v.unwrap() : v])) as { [K in keyof S]: WithoutDefault<S[K]> };
+  return z.object(shape).partial();
+}
+
+export const toDateString =(d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
 
 export function parseJson(value: string | null | undefined): unknown {
   if (!value) return null;

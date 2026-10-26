@@ -12,7 +12,7 @@ import { withTenant } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
 import { decryptJson, encryptJson, mergeEncrypted } from '../../lib/crypto.js';
 import { conflict, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 import { PASSWORD_ROUNDS } from '../auth/auth.routes.js';
 
@@ -119,7 +119,7 @@ staffRouter.post('/staff', async (req, res) => {
 staffRouter.patch('/staff/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = staffInput.omit({ createLogin: true, branchId: true }).partial().parse(req.body);
+  const body = forPatch(staffInput.omit({ createLogin: true, branchId: true })).parse(req.body);
   const { sensitive, bank, allowances, profile, ...cols } = body;
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.staff.findUnique({ where: { id } });

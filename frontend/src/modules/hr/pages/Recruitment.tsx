@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Link } from "react-router";
-import { Briefcase, CalendarClock, ExternalLink, FileText, Mail, Pencil, Phone, Plus, Search, UserCheck, Users } from "lucide-react";
+import { Link, useNavigate } from "react-router";
+import { Briefcase, CalendarClock, ExternalLink, FileSignature, FileText, ListChecks, Mail, Pencil, Phone, Plus, Search, UserCheck, UserPlus, Users } from "lucide-react";
 import { toast } from "sonner";
+import { errorMessage } from "@/api/client";
+import { CandidatePipeline } from "@/components/hr/CandidatePipeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,8 +18,8 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { StatCard } from "@/components/common/StatCard";
 import { daysFromToday } from "@/lib/dates";
 import {
-  APPLICATION_STATUSES, EMPLOYMENT_TYPES, JOB_CATEGORIES, isAcceptingApplications, saveJob, setJobOpen, updateApplication, useApplications, useJobs,
-  type ApplicationStatus, type JobOpening,
+  APPLICATION_STATUSES, EMPLOYMENT_TYPES, JOB_CATEGORIES, addCandidate, isAcceptingApplications, saveJob, setJobOpen, updateApplication, useApplications, useJobs,
+  type ApplicationStatus, type JobApplication, type JobOpening,
 } from "@/store/recruitment";
 import { useSite } from "@/store/website";
 
@@ -30,6 +32,8 @@ const STATUS_STYLE: Record<ApplicationStatus, string> = {
 };
 
 type JobDraft = Omit<JobOpening, "id" | "postedOn" | "responsibilities"> & { id?: number; responsibilities: string };
+type CandidateDraft = Parameters<typeof addCandidate>[0];
+const SOURCES = ["Referral", "Job portal", "Walk-in", "Campus", "Consultant", "Social media", "Newspaper"];
 
 export function Recruitment() {
   const jobs = useJobs();
@@ -39,6 +43,20 @@ export function Recruitment() {
   const [jobFilter, setJobFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("active");
   const [draft, setDraft] = useState<JobDraft | null>(null);
+  const [pipeline, setPipeline] = useState<JobApplication | null>(null);
+  const [candidate, setCandidate] = useState<CandidateDraft | null>(null);
+  const navigate = useNavigate();
+  const blankCandidate = (): CandidateDraft => ({ jobId: open[0]?.id ?? null, name: "", email: "", phone: "", qualification: "", experienceYears: 0, currentEmployer: "", expectedSalary: "", source: "Referral", notes: "" });
+  async function saveCandidate() {
+    if (!candidate) return;
+    try {
+      await addCandidate(candidate);
+      toast.success(`${candidate.name} added`);
+      setCandidate(null);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  }
 
   const jobTitle = (id: number | null) => (id === null ? "General application" : jobs.find((j) => j.id === id)?.title ?? "Closed position");
   const open = jobs.filter(isAcceptingApplications);
@@ -78,6 +96,8 @@ export function Recruitment() {
         actions={
           <>
             <Button variant="outline" className="gap-2" asChild><Link to="/school/careers" target="_blank"><ExternalLink className="h-4 w-4" />View careers page</Link></Button>
+            <Button variant="outline" className="gap-2" asChild><Link to="/hr/offers"><FileSignature className="h-4 w-4" />Offers</Link></Button>
+            <Button variant="outline" className="gap-2" onClick={() => setCandidate(blankCandidate())}><UserPlus className="h-4 w-4" />Add candidate</Button>
             <Button className="gap-2" onClick={() => setDraft(blankJob())}><Plus className="h-4 w-4" />Post a job</Button>
           </>
         }
@@ -131,6 +151,8 @@ export function Recruitment() {
                     <p className="font-medium text-foreground">{a.name}</p>
                     <Badge variant="outline">{jobTitle(a.jobId)}</Badge>
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[a.status]}`}>{a.status}</span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{a.source}</span>
+                    {a.screeningScore != null && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${a.screeningScore >= 70 ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : a.screeningScore >= 50 ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" : "bg-red-500/10 text-red-700 dark:text-red-300"}`}>Screening {a.screeningScore}</span>}
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">{a.qualification} · {a.experienceYears} yr{a.experienceYears === 1 ? "" : "s"} experience{a.currentEmployer && a.currentEmployer !== "—" ? ` · ${a.currentEmployer}` : ""}</p>
                   <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -151,8 +173,9 @@ export function Recruitment() {
                     <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
                     <SelectContent>{APPLICATION_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                   </Select>
+                  <Button size="sm" className="h-8 gap-1" onClick={() => setPipeline(a)}><ListChecks className="h-4 w-4" /> Screen · Interview · Offer</Button>
                   {a.status === "Selected" && (
-                    <Button size="sm" variant="outline" asChild><Link to="/hr/setup/teachers">Add as staff</Link></Button>
+                    <Button size="sm" variant="outline" asChild><Link to="/hr/offers">Offer & joining</Link></Button>
                   )}
                 </div>
               </CardContent>
@@ -233,6 +256,46 @@ export function Recruitment() {
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setDraft(null)}>Cancel</Button>
             <Button onClick={saveDraft}>{draft?.id ? "Save changes" : "Post job"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {pipeline && (
+        <CandidatePipeline app={applications.find((a) => a.id === pipeline.id) ?? pipeline} jobTitle={jobTitle(pipeline.jobId)} onClose={() => setPipeline(null)} onOffered={() => { setPipeline(null); navigate("/hr/offers"); }} />
+      )}
+
+      <Dialog open={candidate !== null} onOpenChange={(o) => !o && setCandidate(null)}>
+        <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
+          <DialogHeader><DialogTitle>Add a candidate</DialogTitle></DialogHeader>
+          {candidate && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Position</Label>
+                <Select value={candidate.jobId == null ? "null" : String(candidate.jobId)} onValueChange={(v) => setCandidate({ ...candidate, jobId: v === "null" ? null : Number(v) })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{jobs.map((j) => <SelectItem key={j.id} value={String(j.id)}>{j.title}</SelectItem>)}<SelectItem value="null">General (no opening)</SelectItem></SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label>Name</Label><Input value={candidate.name} onChange={(e) => setCandidate({ ...candidate, name: e.target.value })} /></div>
+              <div className="space-y-1.5">
+                <Label>Source</Label>
+                <Select value={candidate.source} onValueChange={(v) => setCandidate({ ...candidate, source: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{SOURCES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={candidate.email} onChange={(e) => setCandidate({ ...candidate, email: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Phone</Label><Input value={candidate.phone} onChange={(e) => setCandidate({ ...candidate, phone: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Qualification</Label><Input value={candidate.qualification} onChange={(e) => setCandidate({ ...candidate, qualification: e.target.value })} placeholder="M.Sc. Chemistry, B.Ed." /></div>
+              <div className="space-y-1.5"><Label>Experience (years)</Label><Input type="number" min={0} value={candidate.experienceYears} onChange={(e) => setCandidate({ ...candidate, experienceYears: Math.max(0, Math.round(Number(e.target.value))) })} /></div>
+              <div className="space-y-1.5"><Label>Current employer</Label><Input value={candidate.currentEmployer} onChange={(e) => setCandidate({ ...candidate, currentEmployer: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Expected salary</Label><Input value={candidate.expectedSalary} onChange={(e) => setCandidate({ ...candidate, expectedSalary: e.target.value })} placeholder="₹45,000 / month" /></div>
+              <div className="space-y-1.5 sm:col-span-2"><Label>Notes</Label><Textarea rows={2} value={candidate.notes} onChange={(e) => setCandidate({ ...candidate, notes: e.target.value })} placeholder="Referred by…" /></div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCandidate(null)}>Cancel</Button>
+            <Button onClick={saveCandidate} disabled={!candidate || candidate.name.trim().length < 2 || !candidate.email.includes("@") || candidate.phone.trim().length < 7 || candidate.qualification.trim().length < 2}>Add candidate</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -14,6 +14,10 @@ import { publicRouter } from './modules/public/public.routes.js';
 import { frontOfficeRouter } from './modules/frontoffice/frontoffice.routes.js';
 import { websiteRouter } from './modules/website/website.routes.js';
 import { facilitiesRouter } from './modules/facilities/facilities.routes.js';
+import { exitRouter } from './modules/hrms/exit.routes.js';
+import { recruitmentRouter } from './modules/hrms/recruitment.routes.js';
+import { trainingRouter } from './modules/hrms/training.routes.js';
+import { workforceRouter } from './modules/hrms/workforce.routes.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { classesRouter } from './modules/classes/classes.routes.js';
 import { orgRouter } from './modules/org/org.routes.js';
@@ -57,6 +61,10 @@ export function createApp() {
   api.use(websiteRouter);
   api.use(frontOfficeRouter);
   api.use(facilitiesRouter);
+  api.use(workforceRouter);
+  api.use(recruitmentRouter);
+  api.use(trainingRouter);
+  api.use(exitRouter);
 
   app.use('/api/v1', api);
   app.use(notFoundHandler);

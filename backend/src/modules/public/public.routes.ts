@@ -161,7 +161,7 @@ publicRouter.post('/public/:org/applications', formLimiter, async (req, res) => 
     await tx.jobApplication.create({
       data: {
         organizationId: org.id, branchId, jobOpeningId: body.jobId ?? null, name: body.name, email: body.email, phone: body.phone, qualification: body.qualification,
-        experienceYears: body.experienceYears, currentEmployer: body.currentEmployer, expectedSalary: body.expectedSalary, coverLetter: body.coverLetter, resumeFileId: resume?.id ?? null,
+        experienceYears: body.experienceYears, currentEmployer: body.currentEmployer, expectedSalary: body.expectedSalary, coverLetter: body.coverLetter, resumeFileId: resume?.id ?? null, source: 'Website',
       },
     });
   });
