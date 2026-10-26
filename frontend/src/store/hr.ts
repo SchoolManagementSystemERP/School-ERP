@@ -125,9 +125,11 @@ export interface PayslipLine {
   name: string;
   designation: string;
   gross: number;
-  /** PF + professional tax */
+  /** PF, ESI, professional tax and TDS */
   deductions: number;
   net: number;
+  /** the saved payslip (absent until the run is saved) */
+  payslipId?: string;
 }
 
 export interface PayrollRun {
@@ -161,10 +163,10 @@ export function currentPayslips(): PayslipLine[] {
   ];
 }
 
-interface ApiRun { month: string; status: string; processedAt: string; paidAt: string | null; payslips: { staffId: string; employeeCode: string; name: string; designation: string; staffType: string; gross: number; deductions: number; net: number }[] }
+interface ApiRun { month: string; status: string; processedAt: string; paidAt: string | null; payslips: { id: string; staffId: string; employeeCode: string; name: string; designation: string; staffType: string; gross: number; deductions: number; net: number }[] }
 const toRun = (r: ApiRun): PayrollRun => ({
   month: r.month, processedOn: r.processedAt, ...(r.paidAt ? { paidOn: r.paidAt } : {}),
-  lines: r.payslips.map((p) => ({ kind: p.staffType === "TEACHING" ? "teacher" : "staff", id: numId("staff", p.staffId), empId: p.employeeCode, name: p.name, designation: p.designation, gross: p.gross, deductions: p.deductions, net: p.net })),
+  lines: r.payslips.map((p) => ({ kind: p.staffType === "TEACHING" ? "teacher" : "staff", id: numId("staff", p.staffId), empId: p.employeeCode, name: p.name, designation: p.designation, gross: p.gross, deductions: p.deductions, net: p.net, payslipId: p.id })),
 });
 
 /** Payroll runs, from the API (GET /payroll). */

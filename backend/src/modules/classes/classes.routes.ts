@@ -5,7 +5,7 @@ import { withTenant, type Tx } from '../../db/prisma.js';
 import { currentYear } from '../../lib/academic.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, forbidden, notFound } from '../../lib/errors.js';
-import { idParam } from '../../lib/http.js';
+import { forPatch, idParam } from '../../lib/http.js';
 import { ctxOf, requireAnywhere } from '../../middleware/authenticate.js';
 
 export const classesRouter = Router();
@@ -96,7 +96,7 @@ classesRouter.post('/grades/:id/sections', async (req, res) => {
 classesRouter.patch('/sections/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = sectionBody.partial().parse(req.body);
+  const body = forPatch(sectionBody).parse(req.body);
   const section = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.section.findUnique({ where: { id } });
     if (!before) throw notFound('Section');

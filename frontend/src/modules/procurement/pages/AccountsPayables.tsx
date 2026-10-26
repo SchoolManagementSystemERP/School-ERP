@@ -16,7 +16,7 @@ import { today } from "@/lib/dates";
 import { EXPENSE_CATEGORIES } from "@/store/finance";
 import {
   decideBill, inr, payBill, pettyCashBalance, receivedValue, recordBill, round2, spendPettyCash, tdsFor, topUpPettyCash,
-  useIndents, usePettyCash, useProcurementSettings, usePurchaseOrders, useVendorBills, useVendorPayments, useVendors,
+  useGoodsReceipts, useIndents, usePettyCash, useProcurementSettings, usePurchaseOrders, useVendorBills, useVendorPayments, useVendors,
   type BillStatus, type PurchaseOrder, type VendorBill, type VendorPayment,
 } from "@/store/procurement";
 import { ErrorText, useAction } from "../components";
@@ -165,6 +165,7 @@ export function AccountsPayables() {
   const payments = useVendorPayments();
   const vendors = useVendors();
   const indents = useIndents();
+  const receipts = useGoodsReceipts();
   const [billFor, setBillFor] = useState<PurchaseOrder | null>(null);
   const [payFor, setPayFor] = useState<VendorBill | null>(null);
   const [notes, setNotes] = useState<Record<number, string>>({});
@@ -200,11 +201,14 @@ export function AccountsPayables() {
         <TabsContent value="bills" className="mt-4 space-y-4">
           {unbilled.length > 0 && (
             <Card>
-              <CardHeader><CardTitle className="text-base">Goods received — waiting for the vendor's bill</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-base">GRNs received from the store — waiting for the vendor's bill</CardTitle></CardHeader>
               <CardContent className="space-y-2">
                 {unbilled.map(({ p, left }) => (
                   <div key={p.id} className="flex flex-col gap-2 rounded-lg border border-border p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div><p className="font-medium text-foreground">{p.no} · {vendorName(p.vendorId)}</p><p className="text-sm text-muted-foreground">{indents.find((i) => i.id === p.indentId)?.location} · billable {inr(left)}</p></div>
+                    <div>
+                      <p className="font-medium text-foreground">{p.no} · {vendorName(p.vendorId)} <span className="font-mono text-xs text-muted-foreground">{vendors.find((v) => v.id === p.vendorId)?.code}</span></p>
+                      <p className="text-sm text-muted-foreground">{receipts.filter((g) => g.poId === p.id).map((g) => `${g.no} (${g.date})`).join(", ") || "GRN"} · {indents.find((i) => i.id === p.indentId)?.location} · billable {inr(left)}</p>
+                    </div>
                     <Button size="sm" className="gap-1.5" onClick={() => setBillFor(p)}><FileInput className="h-4 w-4" />Enter bill</Button>
                   </div>
                 ))}

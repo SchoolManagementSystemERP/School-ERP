@@ -152,7 +152,33 @@ export interface PurchaseOrder {
   status: POStatus;
   /** Why this vendor when it was not the lowest quotation. */
   selectionNote?: string;
+  /** The vendor's bills against this order, as Accounts recorded them. */
+  bills: { billNo: string; billDate: string; total: number; status: BillStatus; paidOn: string | null }[];
 }
+
+export type AccountsStage = "AWAITING_GOODS" | "AWAITING_BILL" | "IN_REVIEW" | "ON_HOLD" | "AWAITING_PAYMENT" | "PAID";
+export const ACCOUNTS_STAGE: Record<AccountsStage, { label: string; className: string }> = {
+  AWAITING_GOODS: { label: "Goods not received", className: "bg-muted text-muted-foreground" },
+  AWAITING_BILL: { label: "With Accounts — bill awaited", className: "bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  IN_REVIEW: { label: "Bill mismatch — in review", className: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  ON_HOLD: { label: "Bill on hold", className: "bg-red-500/10 text-red-700 dark:text-red-300" },
+  AWAITING_PAYMENT: { label: "Billed — payment due", className: "bg-violet-500/10 text-violet-700 dark:text-violet-300" },
+  PAID: { label: "Paid", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+};
+
+/** Where a purchase order stands in Accounts after its goods receipts (GRN → bill → payment). */
+export function accountsStage(po: PurchaseOrder): AccountsStage {
+  if (!po.lines.some((l) => l.accepted > 0)) return "AWAITING_GOODS";
+  const live = po.bills.filter((b) => b.status !== "ON_HOLD");
+  if (!live.length) return po.bills.length ? "ON_HOLD" : "AWAITING_BILL";
+  if (live.some((b) => b.status === "MISMATCH")) return "IN_REVIEW";
+  const billed = live.reduce((s, b) => s + b.total, 0);
+  if (billed + 1 < receivedValue(po).total) return "AWAITING_BILL";
+  return live.every((b) => b.status === "PAID") ? "PAID" : "AWAITING_PAYMENT";
+}
+
+/** PO value with GST. */
+export const poTotal = (p: PurchaseOrder) => round2(p.lines.reduce((s, l) => s + l.qty * l.rate, 0) * (1 + p.gstPercent / 100));
 
 export interface GRNLine {
   line: number;
@@ -195,6 +221,8 @@ export type TdsSection = "None" | "194C" | "194J" | "194I";
 
 export interface Vendor {
   id: number;
+  /** V-0001…, given by the server */
+  code: string;
   name: string;
   category: string;
   gstin: string;
@@ -266,11 +294,12 @@ interface ApiQuotation { id: string; indentId: string; vendorId: string; gstPerc
 interface ApiPO {
   id: string; no: string; indentId: string; vendorId: string; quotationId: string; orderDate: string; deliveryBy: string; gstPercent: number; status: POStatus; selectionNote: string | null;
   lines: { lineNo: number; name: string; qty: number; unit: string; rate: number; received: number; accepted: number }[];
+  bills?: PurchaseOrder["bills"];
 }
 interface ApiGRN { id: string; no: string; poId: string; receivedOn: string; receivedBy: string; checkedBy: string; challanNo: string; lines: { lineNo: number; received: number; accepted: number; rejectedReason: string | null }[] }
 interface ApiBill { id: string; poId: string; vendorId: string; billNo: string; billDate: string; subtotal: number; gst: number; total: number; expected: number; status: BillStatus; note: string | null; createdAt: string }
 interface ApiVendor {
-  id: string; name: string; category: string | null; gstin: string | null; pan: string | null; phone: string | null; email: string | null; address: string | null;
+  id: string; code: string | null; name: string; category: string | null; gstin: string | null; pan: string | null; phone: string | null; email: string | null; address: string | null;
   bank: { bankName: string; ifsc: string; accountLast4: string } | null; tdsSection: "NONE" | "194C" | "194J" | "194I"; isIndividual: boolean; isActive: boolean;
 }
 interface ApiPayment { id: string; billId: string; vendorId: string; paidOn: string; gross: number; tdsSection: string; tds: number; net: number; mode: "NEFT" | "CHEQUE" | "UPI"; reference: string }
@@ -299,13 +328,14 @@ const toPO = (p: ApiPO): PurchaseOrder => ({
   id: numId("po", p.id), no: p.no, indentId: numId("indent", p.indentId), vendorId: numId("vendor", p.vendorId), quotationId: numId("quotation", p.quotationId),
   date: p.orderDate, deliveryBy: p.deliveryBy, gstPercent: p.gstPercent, status: p.status, ...(p.selectionNote ? { selectionNote: p.selectionNote } : {}),
   lines: p.lines.map((l) => ({ line: l.lineNo, name: l.name, qty: l.qty, unit: l.unit, rate: l.rate, received: l.received, accepted: l.accepted })),
+  bills: p.bills ?? [],
 });
 const toGRN = (g: ApiGRN): GoodsReceipt => ({
   id: numId("grn", g.id), no: g.no, poId: numId("po", g.poId), date: g.receivedOn, receivedBy: g.receivedBy, checkedBy: g.checkedBy, challanNo: g.challanNo,
   lines: g.lines.map((l) => ({ line: l.lineNo, received: l.received, accepted: l.accepted, ...(l.rejectedReason ? { rejectedReason: l.rejectedReason } : {}) })),
 });
 const toVendor = (v: ApiVendor): Vendor => ({
-  id: numId("vendor", v.id), name: v.name, category: v.category ?? "", gstin: v.gstin ?? "", pan: v.pan ?? "", phone: v.phone ?? "", email: v.email ?? "", address: v.address ?? "",
+  id: numId("vendor", v.id), code: v.code ?? "", name: v.name, category: v.category ?? "", gstin: v.gstin ?? "", pan: v.pan ?? "", phone: v.phone ?? "", email: v.email ?? "", address: v.address ?? "",
   bankName: v.bank?.bankName ?? "", accountNo: v.bank ? `XXXXXX${v.bank.accountLast4}` : "", ifsc: v.bank?.ifsc ?? "",
   tdsSection: v.tdsSection === "NONE" ? "None" : v.tdsSection, isIndividual: v.isIndividual, active: v.isActive,
 });

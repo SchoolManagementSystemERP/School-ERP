@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
-import { ChevronDown, GraduationCap, LogOut, Menu, Settings, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, GraduationCap, LogOut, Menu, Settings, UserCircle, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
 import { cn } from "@/components/ui/utils";
+import { currentAcademicYear } from "@/store/classes";
 import { clearAllStores } from "@/store/remote";
 import { authStore, logout } from "@/store/session";
 
@@ -32,14 +33,21 @@ interface AppShellProps {
   setup?: NavGroup[];
   /** Extra controls in the top bar (e.g. a child switcher). */
   headerExtra?: React.ReactNode;
+  /** Phone-style tab bar at the bottom on small screens (up to 4 items; "Menu" opens the full list). */
+  bottomNav?: NavItem[];
 }
 
 /** Shared app frame for every role: sidebar, top bar and page area. */
-export function AppShell({ portal, home, nav, user: shown, setup, headerExtra }: AppShellProps) {
+export function AppShell({ portal, home, nav: portalNav, user: shown, setup, headerExtra, bottomNav }: AppShellProps) {
   // Staff portals show the signed-in person; student and parent portals pass the child they are viewing.
   const { me, role } = authStore.useValue();
+  // every employee's self-service (payslips, claims, trainings, resignation)
+  const hasMyHr = portalNav.some((g) => g.items.some((i) => i.href.endsWith("/my-hr")));
+  const nav = role && !["student", "parent", "admin"].includes(role) && !hasMyHr
+    ? [...portalNav, { label: "Me", items: [{ name: "My HR", href: `${home}/my-hr`, icon: UserCircle }] }]
+    : portalNav;
   const user = me && role !== "student" && role !== "parent"
-    ? { ...shown, name: me.user.name, initials: me.user.name.replace(/^(Dr|Mr|Mrs|Ms).?s+/, "").split(/s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() }
+    ? { ...shown, name: me.user.name, initials: me.user.name.replace(/^(Dr|Mr|Mrs|Ms|Shri)\.?\s+/, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() }
     : shown;
   const location = useLocation();
   const navigate = useNavigate();
@@ -178,17 +186,44 @@ export function AppShell({ portal, home, nav, user: shown, setup, headerExtra }:
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <span className="hidden rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground md:inline-block">
-              AY 2025-26
-            </span>
+            {currentAcademicYear && (
+              <span className="hidden rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground md:inline-block">
+                AY {currentAcademicYear}
+              </span>
+            )}
             <ThemeSwitcher />
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1440px] p-4 sm:p-6 lg:p-8">
+        <main className={cn("mx-auto w-full max-w-[1440px] p-4 sm:p-6 lg:p-8", bottomNav && "pb-24 lg:pb-8")}>
           <Outlet />
         </main>
       </div>
+
+      {/* ── Bottom tab bar (phones) ── */}
+      {bottomNav && (
+        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
+          <ul className="mx-auto grid max-w-md" style={{ gridTemplateColumns: `repeat(${bottomNav.length + 1}, minmax(0, 1fr))` }}>
+            {bottomNav.map((item) => {
+              const active = isActive(item.href);
+              return (
+                <li key={item.href}>
+                  <Link to={item.href} className={cn("flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium", active ? "text-primary" : "text-muted-foreground")} aria-current={active ? "page" : undefined}>
+                    <item.icon className={cn("h-5 w-5", active && "stroke-[2.4]")} />
+                    {item.name}
+                  </Link>
+                </li>
+              );
+            })}
+            <li>
+              <button type="button" onClick={() => setOpen(true)} className={cn("flex h-16 w-full flex-col items-center justify-center gap-1 text-[11px] font-medium", bottomNav.some((i) => isActive(i.href)) ? "text-muted-foreground" : "text-primary")}>
+                <Menu className="h-5 w-5" />
+                More
+              </button>
+            </li>
+          </ul>
+        </nav>
+      )}
     </div>
   );
 }

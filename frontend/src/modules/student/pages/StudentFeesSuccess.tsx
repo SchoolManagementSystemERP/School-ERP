@@ -19,29 +19,13 @@ import {
   Building2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { currentAcademicYear } from "@/store/classes";
 import { useCurrentStudent } from "@/store/session";
+import { useSite } from "@/store/website";
 import { useSectionBase } from "@/lib/section";
 
-// In real app, get these from router query params or global state
-// e.g. useSearchParams() → txnId, amount, installmentName
-const mockPaymentData = {
-  txnId: "TXN987654321",
-  gatewayOrderId: "order_PQR123456",
-  amount: 25000,
-  lateFee: 0,
-  totalPaid: 25000,
-  installmentName: "Third Installment",
-  paymentMethod: "UPI",
-  upiId: "student@okicici",
-  paidAt: new Date().toISOString(),
-  student: {
-    name: "",
-    rollNo: "",
-    class: "",
-    school: "Delhi Public School",
-    academicYear: "2025-26",
-  },
-};
+/** What StudentFees passes after a successful payment (router state). */
+interface PaidState { txnId: string; orderId: string; amount: number; lateFee: number; installmentName: string; method?: string }
 
 export function StudentFeesSuccess() {
   const base = useSectionBase();
@@ -56,25 +40,32 @@ export function StudentFeesSuccess() {
     return () => clearTimeout(t);
   }, []);
 
-  const routeState = (location.state || {}) as Partial<typeof mockPaymentData>;
+  const site = useSite();
+  const paid = location.state as PaidState | null;
+
+  // opened directly (no payment just made): go to the fees page
+  useEffect(() => {
+    if (!paid?.txnId) navigate(`${base}/fees`, { replace: true });
+  }, [paid, base, navigate]);
 
   const data = {
-    ...mockPaymentData,
-    // overrides coming from StudentFees.tsx (navigate state)
-    txnId: routeState.txnId ?? mockPaymentData.txnId,
-    gatewayOrderId: (routeState as any).orderId ?? mockPaymentData.gatewayOrderId,
-    amount: (routeState as any).amount ?? mockPaymentData.amount,
-    installmentName: (routeState as any).installmentName ?? mockPaymentData.installmentName,
-    lateFee: (routeState as any).lateFee ?? mockPaymentData.lateFee,
+    txnId: paid?.txnId ?? "",
+    gatewayOrderId: paid?.orderId ?? "",
+    amount: paid?.amount ?? 0,
+    lateFee: paid?.lateFee ?? 0,
+    totalPaid: (paid?.amount ?? 0) + (paid?.lateFee ?? 0),
+    installmentName: paid?.installmentName ?? "",
+    paymentMethod: paid?.method ?? "Online",
+    upiId: "",
+    paidAt: new Date().toISOString(),
     student: {
-      ...mockPaymentData.student,
       name: student?.name ?? "",
       rollNo: student?.admissionNo || student?.rollNo || "",
       class: student?.class ?? "",
-      academicYear: student?.academicYear || mockPaymentData.student.academicYear,
+      school: site.name,
+      academicYear: student?.academicYear || currentAcademicYear,
     },
   };
-  data.totalPaid = data.amount + data.lateFee;
 
   const formattedDate = new Intl.DateTimeFormat("en-IN", {
     dateStyle: "long",

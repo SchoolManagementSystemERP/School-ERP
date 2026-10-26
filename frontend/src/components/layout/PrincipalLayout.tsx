@@ -1,6 +1,6 @@
 import {
   BarChart3, BookOpen, Boxes, Building2, BuildingIcon, Calendar, ClipboardCheck, FileText, GraduationCap,
-  Group, GroupIcon, HeartHandshake, LayoutDashboard, Library, MessageSquare, Package, Stamp, Upload, UsersRound, Wallet,
+  Group, GroupIcon, HeartHandshake, LayoutDashboard, Library, MessageSquare, Package, Receipt, Stamp, Upload, UsersRound, Wallet,
 } from "lucide-react";
 import { AppShell, type NavGroup } from "./AppShell";
 
@@ -32,6 +32,7 @@ const nav: NavGroup[] = [
     items: [
       { name: "Finance", href: "/principal/finance", icon: Wallet },
       { name: "Purchase Approvals", href: "/principal/purchase-approvals", icon: Stamp },
+      { name: "Expense Claims", href: "/principal/claims", icon: Receipt },
       { name: "Inventory", href: "/principal/inventory", icon: Package },
       { name: "Library", href: "/principal/library", icon: Library },
       { name: "Communication", href: "/principal/communication", icon: MessageSquare },

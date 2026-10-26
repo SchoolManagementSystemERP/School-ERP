@@ -6,6 +6,7 @@ import { nextExamFor, useExams } from "@/store/exams";
 import { attendanceTotals, subjectAttendance } from "@/lib/studentStats";
 import { LOW_ATTENDANCE_THRESHOLD, useAttendanceRecords } from "@/store/attendance";
 import { feeAccount, useFeePayments } from "@/store/fees";
+import { currentAcademicYear } from "@/store/classes";
 import { useCurrentStudent } from "@/store/session";
 
 const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
@@ -42,7 +43,7 @@ export function StudentAdmitCard() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 print:hidden">
         <div>
           <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-foreground">Admit Card</h1>
-          <p className="text-sm text-muted-foreground mt-1">{exam.name} · Academic Year {student.academicYear || "2025-26"}</p>
+          <p className="text-sm text-muted-foreground mt-1">{exam.name} · Academic Year {student.academicYear || currentAcademicYear}</p>
         </div>
         <Button className="gap-2" onClick={() => window.print()}>
           <Printer className="h-4 w-4" /> Print Admit Card

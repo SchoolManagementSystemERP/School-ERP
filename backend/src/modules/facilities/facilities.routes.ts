@@ -6,7 +6,7 @@ import { withTenant, type Tx } from '../../db/prisma.js';
 import { currentYear } from '../../lib/academic.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { memberBranches } from '../../lib/scope.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 
@@ -89,7 +89,7 @@ facilitiesRouter.post('/library/books', async (req, res) => {
 facilitiesRouter.patch('/library/books/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = bookInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(bookInput.omit({ branchId: true })).parse(req.body);
   const book = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.book.findUnique({ where: { id } });
     if (!before) throw notFound('Book');
@@ -220,7 +220,7 @@ facilitiesRouter.post('/inventory/items', async (req, res) => {
 facilitiesRouter.patch('/inventory/items/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = itemInput.omit({ branchId: true, quantity: true }).partial().parse(req.body);
+  const body = forPatch(itemInput.omit({ branchId: true, quantity: true })).parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.inventoryItem.findUnique({ where: { id } });
     if (!before) throw notFound('Item');
@@ -358,7 +358,7 @@ facilitiesRouter.post('/transport/vehicles', async (req, res) => {
 facilitiesRouter.patch('/transport/vehicles/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = vehicleInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(vehicleInput.omit({ branchId: true })).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.vehicle.findUnique({ where: { id } });
     if (!before) throw notFound('Vehicle');
@@ -428,7 +428,7 @@ facilitiesRouter.post('/transport/routes', async (req, res) => {
 facilitiesRouter.patch('/transport/routes/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = routeInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(routeInput.omit({ branchId: true })).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.transportRoute.findUnique({ where: { id } });
     if (!before) throw notFound('Route');
@@ -542,4 +542,82 @@ facilitiesRouter.patch('/hostel/outpasses/:id', async (req, res) => {
     await audit(tx, ctx, { action: 'UPDATE', entity: 'Outpass', entityId: id, branchId: o.branchId, before: { status: o.status }, after: body });
   });
   res.json({ ok: true });
+});
+
+/**
+ * GET /inventory/analysis?months=6 — stock analysis for the store and the principal:
+ *  - valuation by category;
+ *  - ABC analysis on consumption value over the last 12 months (A = top 70 %, B = next 20 %, C = the rest);
+ *  - movement: fast (issued in the last 30 days), slow (31–90 days), non-moving (nothing issued in 90 days);
+ *  - monthly consumption for the last `months` months;
+ *  - days of stock cover and what to reorder (enough for two months of use, at least twice the minimum).
+ */
+facilitiesRouter.get('/inventory/analysis', async (req, res) => {
+  const ctx = ctxOf(req);
+  const q = z.object({ months: z.coerce.number().int().min(3).max(24).default(6) }).parse(req.query);
+  const branchIds = readable(ctx, 'inventory.manage');
+  const out = await withTenant(ctx.organizationId, async (tx) => {
+    const items = await tx.inventoryItem.findMany({ where: { branchId: { in: branchIds } } });
+    const since = new Date(Date.now() - 365 * 86_400_000);
+    const moves = await tx.stockMovement.findMany({ where: { itemId: { in: items.map((i) => i.id) }, createdAt: { gte: since } }, select: { itemId: true, type: true, quantity: true, createdAt: true } });
+    const now = Date.now();
+    const rows = items.map((i) => {
+      const outs = moves.filter((m) => m.itemId === i.id && m.type === 'OUT');
+      const ins = moves.filter((m) => m.itemId === i.id && m.type === 'IN');
+      const issuedYear = outs.reduce((t, m) => t + m.quantity, 0);
+      const issued90 = outs.filter((m) => now - m.createdAt.getTime() <= 90 * 86_400_000).reduce((t, m) => t + m.quantity, 0);
+      const lastOut = outs.reduce<Date | null>((d, m) => (!d || m.createdAt > d ? m.createdAt : d), null);
+      const daysSinceOut = lastOut ? Math.floor((now - lastOut.getTime()) / 86_400_000) : null;
+      const dailyUse = issued90 / 90;
+      const unitPrice = money(i.unitPrice);
+      const monthlyUse = Math.round(dailyUse * 30 * 10) / 10;
+      const target = Math.max(i.minQuantity * 2, Math.ceil(monthlyUse * 2));
+      return {
+        id: i.id, sku: i.sku, name: i.name, category: i.category, unit: i.unit, location: i.location, quantity: i.quantity, minQuantity: i.minQuantity, unitPrice,
+        value: Math.round(i.quantity * unitPrice), consumptionValue: Math.round(issuedYear * unitPrice), issuedLastYear: issuedYear, receivedLastYear: ins.reduce((t, m) => t + m.quantity, 0),
+        monthlyUse, daysOfCover: dailyUse > 0 ? Math.floor(i.quantity / dailyUse) : null,
+        movement: daysSinceOut === null || daysSinceOut > 90 ? 'NON_MOVING' : daysSinceOut <= 30 ? 'FAST' : 'SLOW',
+        lastIssued: lastOut ? toDateString(lastOut) : null,
+        reorderQty: i.quantity < i.minQuantity || (dailyUse > 0 && i.quantity / dailyUse < 30) ? Math.max(0, target - i.quantity) : 0,
+        abc: 'C' as 'A' | 'B' | 'C',
+      };
+    });
+    // ABC on consumption value
+    const totalConsumption = rows.reduce((t, x) => t + x.consumptionValue, 0);
+    let running = 0;
+    for (const x of [...rows].sort((a, b) => b.consumptionValue - a.consumptionValue)) {
+      // an item belongs to the class in which its consumption starts
+      const before = totalConsumption ? running / totalConsumption : 1;
+      running += x.consumptionValue;
+      x.abc = x.consumptionValue > 0 && before < 0.7 ? 'A' : x.consumptionValue > 0 && before < 0.9 ? 'B' : 'C';
+    }
+    const months = Array.from({ length: q.months }, (_, k) => {
+      const d = new Date();
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() - (q.months - 1 - k));
+      return d.toISOString().slice(0, 7);
+    });
+    const priceOf = new Map(items.map((i) => [i.id, money(i.unitPrice)]));
+    const consumption = months.map((m) => ({
+      month: m,
+      issued: moves.filter((x) => x.type === 'OUT' && x.createdAt.toISOString().startsWith(m)).reduce((t, x) => t + x.quantity * (priceOf.get(x.itemId) ?? 0), 0),
+      received: moves.filter((x) => x.type === 'IN' && x.createdAt.toISOString().startsWith(m)).reduce((t, x) => t + x.quantity * (priceOf.get(x.itemId) ?? 0), 0),
+    })).map((c) => ({ ...c, issued: Math.round(c.issued), received: Math.round(c.received) }));
+    const categories = [...new Set(rows.map((x) => x.category))].map((name) => {
+      const inCat = rows.filter((x) => x.category === name);
+      return { name, items: inCat.length, value: inCat.reduce((t, x) => t + x.value, 0), consumptionValue: inCat.reduce((t, x) => t + x.consumptionValue, 0) };
+    }).sort((a, b) => b.value - a.value);
+    const count = (k: 'abc' | 'movement', v: string) => rows.filter((x) => x[k] === v).length;
+    return {
+      totals: {
+        items: rows.length, stockValue: rows.reduce((t, x) => t + x.value, 0), consumptionValue: totalConsumption,
+        lowStock: rows.filter((x) => x.quantity < x.minQuantity).length, toReorder: rows.filter((x) => x.reorderQty > 0).length,
+        deadStockValue: rows.filter((x) => x.movement === 'NON_MOVING').reduce((t, x) => t + x.value, 0),
+      },
+      abc: { A: count('abc', 'A'), B: count('abc', 'B'), C: count('abc', 'C') },
+      movement: { FAST: count('movement', 'FAST'), SLOW: count('movement', 'SLOW'), NON_MOVING: count('movement', 'NON_MOVING') },
+      categories, consumption, items: rows.sort((a, b) => b.consumptionValue - a.consumptionValue || b.value - a.value),
+    };
+  });
+  res.json(out);
 });
