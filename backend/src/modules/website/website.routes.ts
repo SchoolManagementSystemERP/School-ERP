@@ -33,7 +33,7 @@ websiteRouter.get('/website', async (req, res) => {
 websiteRouter.put('/website', async (req, res) => {
   const ctx = ctxOf(req);
   if (!ctx.access.can('org.manage')) throw forbidden();
-  const site = z.record(z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
+  const site = z.record(z.string(), z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
   if (typeof site.name !== 'string' || !site.name.trim()) throw badRequest('The school name is required.');
   await withTenant(ctx.organizationId, async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { settings: true } });
