@@ -42,7 +42,7 @@ workforceRouter.put('/hr/settings', async (req, res) => {
     basicPercent: pct, hraPercentOfBasic: pct, pfRate: pct, pfWageCeiling: z.number().min(0), pfOnActualBasic: z.boolean(),
     esiWageCeiling: z.number().min(0), esiEmployeeRate: pct, esiEmployerRate: pct, gratuityPercent: pct,
     professionalTax: z.array(z.object({ from: z.number().min(0), amount: z.number().min(0).max(2500) })).max(20),
-    leavePolicy: z.record(z.number().int().min(0).max(365)), noticeDays: z.number().int().min(0).max(180),
+    leavePolicy: z.record(z.string(), z.number().int().min(0).max(365)), noticeDays: z.number().int().min(0).max(180),
     encashmentDivisor: z.number().int().min(1).max(31), bonusPercent: pct, bonusWageCeiling: z.number().min(0),
   }).partial().parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {

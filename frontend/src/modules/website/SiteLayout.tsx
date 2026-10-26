@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import {
-  ChevronDown, ChevronRight, Clock, Facebook, Instagram, LogIn, Mail, MapPin, Menu, MessageCircle, Phone, Twitter, X, Youtube,
+  ChevronDown, ChevronRight, Clock, LogIn, Mail, MapPin, Menu, MessageCircle, Phone, X,
 } from "lucide-react";
+import { FacebookIcon, InstagramIcon, XIcon, YoutubeIcon } from "@/components/common/SocialIcons";
 import { useSite } from "@/store/website";
 import { SITE_MORE, SITE_NAV } from "./siteContent";
 
@@ -158,10 +159,10 @@ export function SiteLayout() {
             <p className="mt-4 text-sm leading-relaxed text-blue-200">{site.tagline}. A {site.board}-affiliated co-educational school since {site.established}.</p>
             <div className="mt-5 flex gap-2">
               {[
-                { href: site.social.facebook, icon: Facebook, label: "Facebook" },
-                { href: site.social.instagram, icon: Instagram, label: "Instagram" },
-                { href: site.social.youtube, icon: Youtube, label: "YouTube" },
-                { href: site.social.x, icon: Twitter, label: "X" },
+                { href: site.social.facebook, icon: FacebookIcon, label: "Facebook" },
+                { href: site.social.instagram, icon: InstagramIcon, label: "Instagram" },
+                { href: site.social.youtube, icon: YoutubeIcon, label: "YouTube" },
+                { href: site.social.x, icon: XIcon, label: "X" },
               ].map((s) => (
                 <a key={s.label} href={s.href} target="_blank" rel="noreferrer" aria-label={s.label} className="grid size-9 place-items-center rounded-full bg-white/10 transition hover:bg-amber-400 hover:text-blue-950"><s.icon className="size-4" /></a>
               ))}

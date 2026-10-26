@@ -6,7 +6,7 @@ import { withTenant, type Tx } from '../../db/prisma.js';
 import { currentYear } from '../../lib/academic.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
-import { dateOnly, idParam, parseJson, toDateString } from '../../lib/http.js';
+import { dateOnly, forPatch, idParam, parseJson, toDateString } from '../../lib/http.js';
 import { memberBranches } from '../../lib/scope.js';
 import { ctxOf } from '../../middleware/authenticate.js';
 
@@ -89,7 +89,7 @@ facilitiesRouter.post('/library/books', async (req, res) => {
 facilitiesRouter.patch('/library/books/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = bookInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(bookInput.omit({ branchId: true })).parse(req.body);
   const book = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.book.findUnique({ where: { id } });
     if (!before) throw notFound('Book');
@@ -220,7 +220,7 @@ facilitiesRouter.post('/inventory/items', async (req, res) => {
 facilitiesRouter.patch('/inventory/items/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = itemInput.omit({ branchId: true, quantity: true }).partial().parse(req.body);
+  const body = forPatch(itemInput.omit({ branchId: true, quantity: true })).parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.inventoryItem.findUnique({ where: { id } });
     if (!before) throw notFound('Item');
@@ -358,7 +358,7 @@ facilitiesRouter.post('/transport/vehicles', async (req, res) => {
 facilitiesRouter.patch('/transport/vehicles/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = vehicleInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(vehicleInput.omit({ branchId: true })).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.vehicle.findUnique({ where: { id } });
     if (!before) throw notFound('Vehicle');
@@ -428,7 +428,7 @@ facilitiesRouter.post('/transport/routes', async (req, res) => {
 facilitiesRouter.patch('/transport/routes/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = routeInput.omit({ branchId: true }).partial().parse(req.body);
+  const body = forPatch(routeInput.omit({ branchId: true })).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const before = await tx.transportRoute.findUnique({ where: { id } });
     if (!before) throw notFound('Route');
