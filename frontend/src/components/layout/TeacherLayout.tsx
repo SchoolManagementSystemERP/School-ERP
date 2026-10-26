@@ -1,4 +1,4 @@
-import { BookOpen, Building2, Calendar, CalendarOff, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, MessageSquare, School, Upload, Users } from "lucide-react";
+import { BookOpen, Building2, Calendar, CalendarOff, ClipboardCheck, ClipboardList, FileText, LayoutDashboard, MessageSquare, School, Upload, UserCircle, Users } from "lucide-react";
 import { teacherSubjects, useCurrentTeacher } from "@/store/session";
 import { AppShell, type NavGroup } from "./AppShell";
 
@@ -34,6 +34,7 @@ export function TeacherLayout() {
       ...(teacher?.classTeacherOf ? [{ name: `My Class (${teacher.classTeacherOf})`, href: "/teacher/my-class", icon: School }] : []),
       ...(teacher?.positions.includes("Head of Department (HOD)") ? [{ name: "My Department", href: "/teacher/department", icon: Building2 }] : []),
       { name: "My Leave", href: "/teacher/leave", icon: CalendarOff },
+      { name: "My HR", href: "/teacher/my-hr", icon: UserCircle },
       { name: "Requisitions", href: "/teacher/requisitions", icon: ClipboardList },
     ],
   };

@@ -16,6 +16,7 @@ import {
 
 import { EXAM_TYPES, MAX_MARKS, SUBJECTS } from "@/data/academics";
 import { useClassRoster } from "@/store/students";
+import { currentAcademicYear } from "@/store/classes";
 import { setMark, useMarks, type MarksStore } from "@/store/marks";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -531,7 +532,7 @@ function ResultCard({
               <div>
                 <h3 className="text-xl font-bold text-foreground">{student.name}</h3>
                 <p className="text-sm text-muted-foreground">Roll No: {student.rollNo} · {cls}</p>
-                <p className="text-sm text-muted-foreground">{exam} · Academic Year 2025-26</p>
+                <p className="text-sm text-muted-foreground">{exam} · Academic Year {currentAcademicYear}</p>
               </div>
             </div>
             <div className="flex gap-6 flex-wrap">

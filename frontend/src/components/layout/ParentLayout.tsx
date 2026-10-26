@@ -1,10 +1,10 @@
 import {
-  Award, BookOpen, Calendar, ClipboardCheck, FileText, Gift, IndianRupee, LayoutDashboard, MessageSquare, Upload,
+  Award, BookOpen, Calendar, ClipboardCheck, FileText, Gift, Home, IndianRupee, LayoutDashboard, MessageSquare, NotebookText,
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { setCurrentStudentId, useCurrentStudent } from "@/store/session";
 import { useStudents } from "@/store/students";
-import { AppShell, type NavGroup } from "./AppShell";
+import { AppShell, type NavGroup, type NavItem } from "./AppShell";
 
 const nav: NavGroup[] = [
   {
@@ -15,9 +15,9 @@ const nav: NavGroup[] = [
     items: [
       { name: "Marks & Results", href: "/parent/marks", icon: FileText },
       { name: "Attendance", href: "/parent/attendance", icon: ClipboardCheck },
-      { name: "Assignments", href: "/parent/assignments", icon: BookOpen },
+      { name: "Homework", href: "/parent/assignments", icon: BookOpen },
       { name: "Timetable", href: "/parent/timetable", icon: Calendar },
-      { name: "Resources", href: "/parent/resources", icon: Upload },
+      { name: "Study Notes", href: "/parent/resources", icon: NotebookText },
       { name: "Admit Card", href: "/parent/admit-card", icon: Award },
     ],
   },
@@ -29,6 +29,14 @@ const nav: NavGroup[] = [
       { name: "Messages & Notices", href: "/parent/communication", icon: MessageSquare },
     ],
   },
+];
+
+/** Tab bar on phones: what a parent checks most. */
+const bottomNav: NavItem[] = [
+  { name: "Home", href: "/parent", icon: Home },
+  { name: "Results", href: "/parent/marks", icon: FileText },
+  { name: "Fees", href: "/parent/fees", icon: IndianRupee },
+  { name: "Messages", href: "/parent/communication", icon: MessageSquare },
 ];
 
 /** Parent portal: the student pages, viewed for one of the parent's children. */
@@ -57,6 +65,7 @@ export function ParentLayout() {
       portal="Parent"
       home="/parent"
       nav={nav}
+      bottomNav={bottomNav}
       headerExtra={switcher}
       user={{
         name: parentName,

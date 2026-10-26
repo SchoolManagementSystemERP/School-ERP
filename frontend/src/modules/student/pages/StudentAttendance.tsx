@@ -14,6 +14,7 @@ import { ClipboardCheck, CheckCircle, XCircle, AlertCircle, TrendingUp, Eye } fr
 import { shortClassName } from "@/data/classes";
 import { attendanceOnDate, attendanceTotals, subjectAttendance } from "@/lib/studentStats";
 import { useAttendanceRecords } from "@/store/attendance";
+import { MiniStats } from "@/components/common/MiniStats";
 import { useCurrentStudent } from "@/store/session";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -75,73 +76,18 @@ export function StudentAttendance() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-foreground">My Attendance</h1>
-          <p className="text-sm text-muted-foreground mt-1">Real-time attendance tracking</p>
-        </div>
-        <div className="flex items-center gap-2 bg-green-100 dark:bg-green-900 px-4 py-2 rounded-full text-sm">
-          <TrendingUp className="h-4 w-4 text-green-600" />
-          <span className="font-semibold text-green-600">{percentageLabel}% Overall</span>
+          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-foreground">Attendance</h1>
+          <p className="text-sm text-muted-foreground mt-1">At least 75% attendance is needed to sit the exams. Tap a date in the calendar to see that day.</p>
         </div>
       </div>
 
       {/* Overall Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card className="hover:shadow-lg transition-all">
-          <CardContent className="p-6">
-            <div className="flex justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Total Classes</p>
-                <p className="text-4xl font-bold mt-3">{overallStats.total}</p>
-              </div>
-              <div className="bg-blue-100 dark:bg-blue-500/10 p-4 rounded-2xl">
-                <ClipboardCheck className="h-9 w-9 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-lg transition-all">
-          <CardContent className="p-6">
-            <div className="flex justify-between">
-              <div>
-                <p className="text-sm text-green-600">Present</p>
-                <p className="text-4xl font-bold mt-3 text-green-600">{overallStats.present}</p>
-              </div>
-              <div className="bg-green-100 dark:bg-green-500/10 p-4 rounded-2xl">
-                <CheckCircle className="h-9 w-9 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-lg transition-all">
-          <CardContent className="p-6">
-            <div className="flex justify-between">
-              <div>
-                <p className="text-sm text-red-600">Absent</p>
-                <p className="text-4xl font-bold mt-3 text-red-600">{overallStats.absent}</p>
-              </div>
-              <div className="bg-red-100 dark:bg-red-500/10 p-4 rounded-2xl">
-                <XCircle className="h-9 w-9 text-red-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover:shadow-lg transition-all">
-          <CardContent className="p-6">
-            <div className="flex justify-between">
-              <div>
-                <p className="text-sm text-emerald-600">Attendance Rate</p>
-                <p className="text-4xl font-bold mt-3 text-emerald-600">{percentageLabel}%</p>
-              </div>
-              <div className="bg-emerald-100 dark:bg-emerald-500/10 p-4 rounded-2xl">
-                <TrendingUp className="h-9 w-9 text-emerald-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <MiniStats items={[
+        { label: "Attendance", value: `${percentageLabel}%`, icon: TrendingUp, tone: Number(percentageLabel) >= 75 ? "green" : "red" },
+        { label: "Present", value: overallStats.present, icon: CheckCircle, tone: "green" },
+        { label: "Absent", value: overallStats.absent, icon: XCircle, tone: "red" },
+        { label: "Periods held", value: overallStats.total, icon: ClipboardCheck, tone: "blue" },
+      ]} />
 
       {/* Filters */}
       <Card>

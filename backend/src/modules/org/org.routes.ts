@@ -72,7 +72,7 @@ const orgUpdate = z.object({
   contactEmail: z.string().trim().email().max(200).optional(),
   contactPhone: z.string().trim().min(6).max(20).optional(),
   logoUrl: z.string().url().max(500).nullable().optional(),
-  settings: z.record(z.unknown()).optional(),
+  settings: z.record(z.string(), z.unknown()).optional(),
 });
 
 /** PUT /org — needs org.manage. */

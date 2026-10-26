@@ -22,7 +22,9 @@
     "test:communication": "tsx scripts/test-communication.ts",
     "test:website": "tsx scripts/test-website.ts",
     "test:facilities": "tsx scripts/test-facilities.ts",
-    "seed:procurement": "tsx scripts/seed-procurement-demo.ts"
+    "seed:procurement": "tsx scripts/seed-procurement-demo.ts",
+    "seed:hr": "tsx scripts/seed-hr-demo.ts",
+    "test:hrms": "tsx scripts/test-hrms.ts"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
@@ -34,7 +36,7 @@
     "express-rate-limit": "7.5.0",
     "helmet": "8.1.0",
     "jsonwebtoken": "9.0.2",
-    "zod": "3.24.2"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/cookie-parser": "1.4.8",

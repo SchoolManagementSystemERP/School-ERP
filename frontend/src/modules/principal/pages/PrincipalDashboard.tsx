@@ -12,6 +12,7 @@ import { useMarks } from "@/store/marks";
 import { useNotes } from "@/store/notes";
 import { useClassRoster, useStudents } from "@/store/students";
 import { useTeachers } from "@/store/teachers";
+import { currentAcademicYear } from "@/store/classes";
 import { StatCard, toneFrom } from "@/components/common/StatCard";
 
 const pct = (n: number, d: number) => (d ? Math.round((n / d) * 100) : 0);
@@ -85,7 +86,7 @@ export function PrincipalDashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-foreground">Principal Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-1">School-wide overview — Academic Year 2025-26</p>
+        <p className="text-sm text-muted-foreground mt-1">School-wide overview — Academic Year {currentAcademicYear}</p>
       </div>
 
       {/* Stats Grid */}

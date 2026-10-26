@@ -33,7 +33,7 @@ websiteRouter.get('/website', async (req, res) => {
 websiteRouter.put('/website', async (req, res) => {
   const ctx = ctxOf(req);
   if (!ctx.access.can('org.manage')) throw forbidden();
-  const site = z.record(z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
+  const site = z.record(z.string(), z.unknown()).refine((s) => JSON.stringify(s).length < 200_000, 'The website profile is too large.').parse(req.body);
   if (typeof site.name !== 'string' || !site.name.trim()) throw badRequest('The school name is required.');
   await withTenant(ctx.organizationId, async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { settings: true } });
@@ -147,6 +147,7 @@ websiteRouter.get('/job-applications', async (req, res) => {
       id: a.id, jobId: a.jobOpeningId, name: a.name, email: a.email, phone: a.phone, qualification: a.qualification, experienceYears: a.experienceYears,
       currentEmployer: a.currentEmployer, expectedSalary: a.expectedSalary, coverLetter: a.coverLetter, resumeName: a.resumeFileId ? files.get(a.resumeFileId) ?? null : null,
       status: a.status, interviewDate: toDateString(a.interviewDate), notes: a.notes, appliedAt: toDateString(a.appliedAt),
+      source: a.source, screeningScore: a.screeningScore, screeningNotes: a.screeningNotes,
     }));
   });
   res.json(rows);
@@ -156,7 +157,10 @@ websiteRouter.get('/job-applications', async (req, res) => {
 websiteRouter.patch('/job-applications/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
-  const body = z.object({ status: z.enum(APP_STATUSES), interviewDate: dateOnly.nullable(), notes: z.string().trim().max(1000).nullable() }).partial().parse(req.body);
+  const body = z.object({
+    status: z.enum(APP_STATUSES), interviewDate: dateOnly.nullable(), notes: z.string().trim().max(1000).nullable(),
+    source: z.string().trim().max(30).nullable(), screeningScore: z.number().int().min(0).max(100).nullable(), screeningNotes: z.string().trim().max(1000).nullable(),
+  }).partial().parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
     const a = await tx.jobApplication.findUnique({ where: { id } });
     if (!a) throw notFound('Application');

@@ -42,11 +42,11 @@ const personal = {
   /** Stored encrypted; only the last four digits are kept readable. */
   aadhaar: z.string().regex(/^\d{12}$/, '12 digits').nullable().optional(),
   admissionDate: dateOnly.nullable().optional(),
-  address: z.record(z.unknown()).nullable().optional(),
-  health: z.record(z.unknown()).nullable().optional(),
-  previousSchool: z.record(z.unknown()).nullable().optional(),
+  address: z.record(z.string(), z.unknown()).nullable().optional(),
+  health: z.record(z.string(), z.unknown()).nullable().optional(),
+  previousSchool: z.record(z.string(), z.unknown()).nullable().optional(),
   /** Everything else the school records (activities, documents checklist, transport wishes…). */
-  profile: z.record(z.unknown()).nullable().optional(),
+  profile: z.record(z.string(), z.unknown()).nullable().optional(),
 };
 
 const createSchema = z.object({
