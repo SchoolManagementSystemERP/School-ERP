@@ -74,8 +74,8 @@ const staffInput = z.object({
   joiningDate: dateOnly.nullable().optional(),
   status: z.enum(['ACTIVE', 'ON_LEAVE', 'SUSPENDED', 'RESIGNED']).default('ACTIVE'),
   basicSalary: z.number().min(0).max(10_000_000).nullable().optional(),
-  allowances: z.record(z.number().min(0).nullable()).nullable().optional(),
-  profile: z.record(z.unknown()).nullable().optional(),
+  allowances: z.record(z.string(), z.number().min(0).nullable()).nullable().optional(),
+  profile: z.record(z.string(), z.unknown()).nullable().optional(),
   /** Aadhaar / PAN — stored encrypted. */
   sensitive: z.object({ aadhaar: z.string().regex(/^\d{12}$/).nullable().optional(), pan: z.string().toUpperCase().regex(/^[A-Z]{5}\d{4}[A-Z]$/).nullable().optional() }).partial().optional(),
   bank: z.object({ bankName: z.string().max(100).optional(), accountNo: z.string().max(30).optional(), ifsc: z.string().max(11).optional(), branch: z.string().max(100).optional(), type: z.string().max(30).optional() }).optional(),
