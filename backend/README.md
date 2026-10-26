@@ -1,26 +1,30 @@
 # School ERP — Backend
 
-REST API for the School ERP: **Node.js + Express + TypeScript**, **Prisma**, **Microsoft SQL Server**.
+REST API for the School ERP: **Node.js (20.19+ / 22.12+ / 24) + Express 5 + TypeScript 7**, **Zod 4**, **Prisma 7**,
+**Microsoft SQL Server**.
 
 It covers sign-in, organization / branches / academic years, classes, users and roles, students, staff,
 academics (timetable, attendance, exams & marks, assignments, notes), fees and expenses, leave and payroll,
-notices and messages, the school website (public pages and forms), front office, library, inventory,
-transport, hostel and purchasing. The frontend uses this API for all of its data.
+notices and messages, the school website (public pages and forms), front office, library, inventory and
+stock analysis, transport, hostel, purchasing (PR → PO → GRN → bill → payment) and the HR suite (staff
+attendance, recruitment and offers, onboarding, compensation, statutory payroll, expense claims, training,
+exits with full & final). The frontend uses this API for all of its data.
 
 ```
 backend/
 ├── DESIGN.md                        full design: tenancy, roles, tables, APIs, security, phases
-├── package.json · tsconfig.json · .env.example
-├── prisma/schema.prisma             data model (83 tables) — source of truth
+├── package.json · tsconfig.json · prisma.config.ts · .env.example
+├── prisma/schema.prisma             data model (92 tables) — source of truth
 ├── database/
 │   ├── schema.sql                   SQL Server DDL generated from schema.prisma
 │   ├── filtered-unique-indexes.sql  "unique when set" columns (Prisma cannot express these)
 │   ├── row-level-security.sql       keeps each organization's data separate
 │   ├── seed.sql                     plans, permissions, 20 built-in roles, demo DAV org with 3 branches
-│   └── migrations/                  changes for databases created earlier (002–009, applied by migrate.ps1)
+│   └── migrations/                  changes for databases created earlier (002–010, applied by migrate.ps1)
 ├── scripts/seed-demo.ts             demo users, teachers, students, parents (+ a 2nd org, Greenfield)
 ├── scripts/import-frontend-demo.ts  builds a 3rd org, Greenwood, from scripts/demo-data/greenwood.json (dates moved to today)
 ├── scripts/seed-procurement-demo.ts purchasing demo for Greenwood, created through the API
+├── scripts/seed-hr-demo.ts          trainings (slides + test) and an expense claim for Greenwood
 ├── scripts/test-*.ts                API and database tests (see "Checking the database")
 └── src/
     ├── server.ts · app.ts           start-up, middleware, route mounting
@@ -28,9 +32,10 @@ backend/
     ├── db/prisma.ts                 withTenant / withSystem — sets the row-level security context
     ├── auth/                        tokens (JWT + refresh), access (who can do what in which branch)
     ├── middleware/                  authenticate, error handler
-    ├── lib/                         errors, audit log, http helpers, read scope (staff vs. student / parent)
+    ├── lib/                         errors, audit log, http helpers (forPatch), read scope, payroll (CTC, PF, ESI, PT, TDS)
     └── modules/                     auth · org · classes · users · students · staff · academics · finance · hr ·
-                                     communication · website · public · frontoffice · facilities · procurement
+                                     communication · website · public · frontoffice · facilities · procurement ·
+                                     hrms (workforce, recruitment, training, exit)
 ```
 
 ## 1. Create the database
@@ -39,7 +44,7 @@ Needs SQL Server 2019+ (Developer / Express is fine) and an administrator Window
 
 ```powershell
 cd backend
-powershell -ExecutionPolicy Bypass -File databasesetup.ps1 -Database school_erp -AppPassword "<strong password>"
+powershell -ExecutionPolicy Bypass -File database/setup.ps1 -Database school_erp -AppPassword "<strong password>"
 ```
 
 This creates the database and runs `schema.sql` → `filtered-unique-indexes.sql` → `row-level-security.sql` →
@@ -47,25 +52,25 @@ This creates the database and runs `schema.sql` → `filtered-unique-indexes.sql
 API's login **`erp_app`** (read / write data only — it cannot change tables or switch off row-level security).
 Put that password in `DATABASE_URL` in `.env`.
 
-**Existing database:** `powershell -ExecutionPolicy Bypass -File databasemigrate.ps1` applies any new
+**Existing database:** `powershell -ExecutionPolicy Bypass -File database/migrate.ps1` applies any new
 `database/migrations/*.sql` (tracked in `dbo.SchemaMigration`) and re-applies constraints and procedures.
 
 | File | What it holds |
 |---|---|
 | `schema.sql` | tables, generated from `prisma/schema.prisma` |
 | `filtered-unique-indexes.sql` | "unique when set" login columns |
-| `row-level-security.sql` | organization isolation for 64 tenant tables |
-| `constraints.sql` | 152 foreign keys, 82 checks (allowed values, amounts, dates), 107 indexes — generated by `node scripts/gen-constraints.mjs` |
+| `row-level-security.sql` | organization isolation for 86 tenant tables |
+| `constraints.sql` | 222 foreign keys, 123 checks (allowed values, amounts, dates), 144 indexes — generated by `node scripts/gen-constraints.mjs` |
 | `procedures.sql` | `usp_Maintenance`, `usp_StudentDataExport` and `usp_StudentAnonymize` (DPDP requests) |
 | `security/app-login.sql` | the least-privilege `erp_app` login |
 | `maintenance/` | backups and the weekly clean-up (below) |
 
 ### Backups
 
-`powershell -ExecutionPolicy Bypass -File databasemaintenanceinstall-backup-tasks.ps1` schedules, with
+`powershell -ExecutionPolicy Bypass -File database/maintenance/install-backup-tasks.ps1` schedules, with
 Windows Task Scheduler: a full backup every night at 02:00, a log backup every hour, and `usp_Maintenance`
 on Sundays. Backups go to `D:SQLBackupsschool_erp` (14 days kept) and are verified after writing.
-Run one now with `databasemaintenanceackup.ps1 -Type Full`. Restore in SSMS: Databases → Restore Database.
+Run one now with `database/maintenance/backup.ps1 -Type Full`. Restore in SSMS: Databases → Restore Database.
 The tasks run while the Windows user is signed in; on a real server use SQL Server Agent.
 
 ### Sensitive data
@@ -86,8 +91,8 @@ check who may do what, and remove the data they create:
 | `npm run test:communication` | notices by audience, public notices, messages between students, parents and teachers — 30 |
 | `npm run test:website` | public pages and forms, enquiries, visitors, careers, website profile — 35 |
 | `npm run test:facilities` | library (fines), inventory (stock), transport (drivers, stops), hostel (rooms, outpasses) — 37 |
-| `npm run test:procurement` | the whole purchase flow — 34 |
-| `npm run test:hrms` | CTC & statutory rules, recruitment → offer → joining → onboarding, staff attendance, claims, payroll & payslips, compliance, training tests & MIS, exit with full & final, vendor codes, stock analysis — 76 |
+| `npm run test:procurement` | the whole purchase flow, PR numbering, store reorders, accounts status of POs — 38 |
+| `npm run test:hrms` | CTC & statutory rules, recruitment → offer → joining → onboarding, staff attendance, claims, payroll & payslips, compliance, training tests & MIS, exit with full & final, vendor codes, stock analysis — 77 |
 
 `npm run test:db` runs 21 checks as the API login: organization isolation (read, insert, update, move),
 that the login cannot alter tables or the security policy, foreign keys / checks / unique rules,
@@ -108,6 +113,10 @@ npm run dev                 # http://localhost:4000/api/v1
 ```
 
 `npm run build && npm start` runs the compiled version. `npm run typecheck` checks types.
+
+**After pulling new changes:** `npm install`, then `npx prisma generate` (stop the API first on Windows —
+the running server locks Prisma's files), then `powershell -ExecutionPolicy Bypass -File database/migrate.ps1`
+to apply new migrations (e.g. `010-hr-suite.sql` for the HR tables).
 
 Use a dedicated SQL login for the API rather than `sa`, with access to `school_erp` only.
 
