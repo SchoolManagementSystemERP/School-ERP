@@ -197,6 +197,25 @@ Login accounts, 52 built-in roles with editable permissions, branch-level access
 Dashboards for every role (attendance, results, fee collection, staff, stock, purchasing), CSV exports and
 printable documents (receipts, admit cards, payslips, offer letters, POs, GRNs, exit letters).
 
+### 4.16 Jarvis — voice and chat assistant
+A floating assistant in every signed-in portal. Ask by typing, by the mic button, or hands-free with
+**“Hey Jarvis”**, in Hinglish, Hindi or English; it answers aloud too.
+- **Answers from ERP data**, read-only and limited to what the person's role may see: a student's fees,
+  attendance, marks and parents' contact; who is absent in a class; fee defaulters (whole school or one
+  class); staff details; who is on leave; low stock; overdue library books; a school summary. These answers
+  are written straight from the database — the AI model never makes up a number. A parent only ever gets
+  their own child's data; a teacher without fee access is told so.
+- **Conversation:** it asks back when something is missing (“Kaunsi class?”, “Kis student ki?”), finishes
+  the question with the next reply (“class 10 A ki dikhao”), keeps the topic (“aur 10 B ki?”, “aur uske
+  marks?”) and drops it on “chhodo”. In “Hey Jarvis” mode it listens for the answer by itself.
+- **Memory:** each person's conversation is kept on the server for 10 minutes (setting
+  `ASSISTANT_MEMORY_MINUTES`) and then deleted; it can also be cleared from the panel.
+- **Pages:** “marks page kholo” opens the page; other questions about the open page go to a local AI model
+  (Ollama) on the school's own server — no outside AI service.
+- **Speech:** “Fast” uses the browser's speech recognition (live text, needs internet — in Chrome the audio
+  goes to Google's speech service); “Private” runs Whisper inside the browser so audio never leaves the
+  device (slower). Teachers can also mark a class register by voice after confirming a preview.
+
 ---
 
 ## 5. Database design
@@ -206,7 +225,7 @@ Microsoft SQL Server, modelled in `backend/prisma/schema.prisma` (92 tables). Th
 | Group | Tables (examples) |
 |---|---|
 | Organization | Organization, Region, Branch, AcademicYear, Plan, Subscription |
-| People and access | User, Role, Permission, Membership, RefreshToken, AuditLog |
+| People and access | User, Role, Permission, Membership, RefreshToken, AuditLog, AssistantMessage (Jarvis memory) |
 | Students | Student, Guardian, Enrollment |
 | Academics | Grade, Section, Subject, TimetablePeriod, AttendanceSession, AttendanceEntry, Exam, ExamPaper, Mark, Assignment, StudyNote, Holiday |
 | Fees and finance | FeePlan, FeeInstallment, FeeConcession, FeePayment, Expense |
@@ -217,7 +236,7 @@ Microsoft SQL Server, modelled in `backend/prisma/schema.prisma` (92 tables). Th
 
 Ids are GUIDs; money is DECIMAL(12,2) in rupees. Foreign keys, check constraints and indexes are in
 `backend/database/constraints.sql`; changes to existing databases are versioned migrations
-(`backend/database/migrations/002–012`).
+(`backend/database/migrations/002–026`).
 
 ---
 
@@ -271,12 +290,18 @@ Sign in with school code `greenwood`, password `Demo@1234` and a username from
 (stop the API first on Windows), and `powershell -File database/migrate.ps1` in `backend` to apply new
 database migrations.
 
-**On a phone (same Wi-Fi / hotspot):** start the frontend with `npx vite --host 0.0.0.0`, find the
-computer's address with `ipconfig` (IPv4), and open `http://<that address>:5173` on the phone. Allow
-Node.js through Windows Firewall on private networks if the page does not open.
+**On a phone (same Wi-Fi / hotspot):** start the frontend with `npm run dev:mobile` (HTTPS — phones only
+allow the microphone on HTTPS), and open the `Network: https://…:5173` address it prints; accept the
+self-signed certificate warning once. Allow Node.js through Windows Firewall if the page does not open. Some
+office / shared Wi-Fi routers block devices from reaching each other — use the laptop's Mobile hotspot then.
+
+**Jarvis:** install [Ollama](https://ollama.com) on the API computer and `ollama pull qwen2.5:7b` (on a
+laptop without a graphics card use `qwen2.5:1.5b` and set `OLLAMA_MODEL` in `backend/.env`). Data answers
+work without it; only open-ended questions about a page need the model.
 
 **Tests:** `cd backend` and run `npm run test:db`, `test:academics`, `test:finance`, `test:communication`,
-`test:website`, `test:facilities`, `test:procurement`, `test:hrms`, `test:group` — 366 checks over HTTP as each role.
+`test:website`, `test:facilities`, `test:procurement`, `test:ledger`, `test:hrms`, `test:group`,
+`test:assistant` — 443 checks over HTTP as each role.
 
 ---
 

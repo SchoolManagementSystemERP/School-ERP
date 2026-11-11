@@ -19,23 +19,28 @@ Vite forwards `/api` to `http://localhost:4000` (set `VITE_API_TARGET` to use an
 The public school website shows the school named by `VITE_SITE_ORG` (default: the last school signed in to,
 else `greenwood`); in production each school's site runs on its own subdomain.
 
-To open the app on a phone on the same Wi-Fi / hotspot, start it with `npx vite --host 0.0.0.0` and open
-`http://<computer's IPv4 address>:5173` (find the address with `ipconfig`).
+To open the app on a phone on the same Wi-Fi / hotspot, run `npm run dev:mobile` and open the
+`Network: https://…:5173` address it prints. It serves HTTPS with a self-signed certificate (accept the
+warning once) because phones only allow the microphone on HTTPS or localhost.
 
-Signed-in portals include Jarvis for page navigation and current-page Q&A using the local Ollama model
-configured on the backend. Teachers with attendance permission can also prepare a complete class register
-by voice and save it after reviewing and confirming the preview. Other record-changing actions are not
-connected to Jarvis yet. Install and start Ollama on the API host as described in `backend/README.md`.
-Voice input uses a multilingual Whisper small model in the browser, with Hindi selected by default for
-Hindi/Hinglish speech; automatic detection and English are also available. Its model files download once
-and are cached by the browser; microphone audio is processed on-device and is not sent to a speech
-service or the ERP server. Raw microphone samples are captured directly in the browser and resampled for
-Whisper, avoiding dependence on recorded-media format decoding. Jarvis shows an editable transcript
-before processing a voice command.
-The first model download needs internet. Microphone access requires localhost or HTTPS (including on phones).
-While recording, use the live level meter; if it stays low, select the correct microphone from Jarvis's
-microphone list, speak, then press the mic button again to transcribe.
-Assistant chat still goes to the local Ollama model on the API host.
+### Jarvis (`src/components/voice/`)
+
+The floating Jarvis button in every signed-in portal: type, press the mic, or turn on **“Hey Jarvis”** and
+speak hands-free. It answers questions from the ERP data (fees, attendance, marks, contacts, absentees,
+defaulters, staff, leave, stock, library), asks back when the class or student is missing and listens for
+the answer by itself in hands-free mode, opens pages (“marks page kholo”), and reads replies aloud.
+The conversation is remembered on the server for 10 minutes (“Memory clear karo” wipes it). How the answers
+are made and which settings exist: `backend/README.md` → Jarvis.
+
+Speech engines (chosen in the panel, remembered per browser):
+- **Fast — browser speech** (default where supported, best in Chrome): live text while speaking; needs
+  internet, and the browser's speech service (Google in Chrome) receives the audio. Needed for “Hey Jarvis”.
+- **Private — on-device Whisper** (`speechWorker.ts`): Whisper small runs in the browser; the model
+  (~250 MB) downloads once with one overall progress bar and retries if the download stops; audio never leaves
+  the device; slower on phones and older laptops.
+
+Every transcript can be edited before it is sent. Teachers with attendance permission can mark a complete
+class register by voice on the attendance page and save it after confirming the preview.
 
 ### Pages
 

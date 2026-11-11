@@ -157,22 +157,40 @@ to apply new migrations (e.g. `010-hr-suite.sql` for the HR tables).
 
 Use a dedicated SQL login for the API rather than `sa`, with access to `school_erp` only.
 
-### Local AI assistant
+### Jarvis (assistant) — `src/modules/assistant/`
 
-The assistant uses a self-hosted Ollama model; it does not call OpenAI, Gemini, or another hosted AI API.
-Install Ollama on the same machine as the API, then download the configured model:
+`POST /assistant/chat` answers in three ways, cheapest first:
+1. **Data conversation, no AI model** (`intent.ts` → `tools.ts`): common questions (a student's fees,
+   attendance, marks, contacts; a class's absentees; fee defaulters; staff; leave; low stock; overdue books;
+   school summary) are recognised by keywords, run as read-only tools and answered word for word from the
+   data. Each tool checks the caller's permissions like the matching ERP page (staff by branch permission,
+   students / parents only their own children). When the class or person is missing Jarvis asks back
+   (`expectsReply: true`) and remembers the open question as `ask:<topic>`, so the next reply finishes it;
+   the last topic and person carry over to follow-ups (“aur 10 B ki?”, “uske marks?”); “chhodo” cancels.
+2. **Local AI model** (Ollama) for anything else: answers about the visible page, opens a page from the
+   visible menu (checked against the links sent), or picks a data tool.
+3. Replies are saved to `AssistantMessage` (migration 026) — the person's memory, read back on each question,
+   deleted after `ASSISTANT_MEMORY_MINUTES` (default 10; swept every minute) and capped at 500 per person.
+   `GET /assistant/history`, `DELETE /assistant/history` (clear), `GET /assistant/status` (model check).
+
+The model is self-hosted; nothing goes to OpenAI, Gemini or another hosted AI API. Install Ollama on the
+API computer and download the model:
 
 ```powershell
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:7b      # or qwen2.5:1.5b on a laptop without a graphics card (about 4× faster)
 ```
 
-`OLLAMA_BASE_URL` defaults to `http://127.0.0.1:11434` and is restricted to loopback addresses.
-`OLLAMA_MODEL` defaults to `qwen2.5:7b`. The assistant sends the signed-in user's current visible page text
-to this local model for read-only Q&A; page text is not stored in the assistant API audit record. Actions
-are not performed by the model. Voice transcription runs in the browser with a locally cached Whisper model;
-microphone audio is not sent to this API. Spoken replies use the device's speech synthesis voices.
-Inference is configured for CPU to avoid instability on low-VRAM
-GPUs; on a 7B model, replies may take a little while. Keep the API host running while using the assistant.
+| Setting (`.env`) | Default | |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | loopback addresses only |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | |
+| `OLLAMA_TIMEOUT_MS` | `120000` | one model reply |
+| `ASSISTANT_PAGE_CHARS` | `3500` | page text sent to the model — the prompt size is what makes CPU replies slow |
+| `ASSISTANT_MEMORY_MINUTES` | `10` | how long Jarvis remembers a conversation |
+
+The model runs on the CPU (`num_gpu: 0`): small laptop GPUs run out of memory on a 4k context and are slower
+anyway. `npm run test:assistant` checks the data answers, permissions, conversation and memory; it does not
+need Ollama.
 
 `DEMO_PAYMENTS=true` lets students and parents "pay" fees online without a payment gateway — for demos only;
 the API refuses to start with it in production. Real online payments must come from the gateway's webhook.

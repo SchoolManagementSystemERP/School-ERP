@@ -425,6 +425,11 @@ export async function availableTools(tx: Tx, ctx: RequestContext) {
     .map(([name]) => name);
 }
 
+/** Tools the user holds as staff (not just for their own children) — only those need "which student?". */
+export function staffTools(ctx: RequestContext) {
+  return Object.entries(TOOLS).filter(([, tool]) => tool.staff.some((p) => branchesFor(ctx, [p]).length > 0)).map(([name]) => name);
+}
+
 /** Runs a tool for this user. Unknown or not-allowed tools return an error object, never throw. */
 export async function runTool(tx: Tx, ctx: RequestContext, name: string, args: Args, allowed: string[]) {
   const tool = TOOLS[name];

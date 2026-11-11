@@ -5,8 +5,8 @@ import { ctxOf } from '../../middleware/authenticate.js';
 import { AppError, badRequest } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
 import { withSystem, withTenant } from '../../db/prisma.js';
-import { availableTools, runTool, TOOLS } from './tools.js';
-import { detectIntent, formatAnswer, nameIn } from './intent.js';
+import { availableTools, runTool, staffTools, TOOLS } from './tools.js';
+import { ASK_PREFIX, formatAnswer, nameIn, planTurn } from './intent.js';
 
 export const assistantRouter = Router();
 
@@ -15,7 +15,7 @@ const MEMORY_KEEP = 500;
 const MEMORY_LOOKBACK = 40;
 const MODEL_HISTORY = 10;
 
-type Reply = { reply: string; navigation: unknown; model: string; source: string | null };
+type Reply = { reply: string; navigation: unknown; model: string; source: string | null; expectsReply?: boolean };
 
 /** Messages older than this are forgotten (ASSISTANT_MEMORY_MINUTES, 10 by default). */
 const memoryCutoff = () => new Date(Date.now() - env.ASSISTANT_MEMORY_MINUTES * 60_000);
@@ -27,13 +27,13 @@ export async function purgeExpiredAssistantMemory() {
 }
 
 /** Save one question and its reply to the user's memory, and trim the oldest beyond MEMORY_KEEP. */
-async function remember(organizationId: string, userId: string, question: string, reply: Reply) {
+async function remember(organizationId: string, userId: string, question: string, reply: Reply, stored: string | null) {
   await withTenant(organizationId, async (tx) => {
     const now = Date.now();
     await tx.assistantMessage.createMany({
       data: [
         { organizationId, userId, role: 'user', content: question.slice(0, 4000), createdAt: new Date(now) },
-        { organizationId, userId, role: 'assistant', content: reply.reply.slice(0, 4000), source: reply.source, createdAt: new Date(now + 1) },
+        { organizationId, userId, role: 'assistant', content: reply.reply.slice(0, 4000), source: stored, createdAt: new Date(now + 1) },
       ],
     });
     const cutoff = await tx.assistantMessage.findMany({
@@ -139,13 +139,18 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
   const question = body.messages[body.messages.length - 1].content;
   // memory: the user's earlier conversation from the database (the browser's copy only if none is saved)
   const saved = await withTenant(ctx.organizationId, (tx) => tx.assistantMessage.findMany({
-    where: { userId: ctx.userId, createdAt: { gte: memoryCutoff() } }, orderBy: { createdAt: 'desc' }, take: MEMORY_LOOKBACK, select: { role: true, content: true },
+    where: { userId: ctx.userId, createdAt: { gte: memoryCutoff() } }, orderBy: { createdAt: 'desc' }, take: MEMORY_LOOKBACK, select: { role: true, content: true, source: true },
   }));
   const earlierTurns = saved.length
     ? saved.reverse().map((m) => ({ role: m.role === 'assistant' ? 'assistant' as const : 'user' as const, content: m.content }))
     : body.messages.slice(0, -1);
-  const send = async (payload: Reply) => {
-    await remember(ctx.organizationId, ctx.userId, question, payload);
+  // what Jarvis said last: a data tool (the topic) or an open question ("ask:fees") still waiting for an answer
+  const lastSource = saved[saved.length - 1]?.role === 'assistant' ? saved[saved.length - 1].source : null;
+  // the person talked about recently, for "uski attendance?" (only recent turns)
+  const lastName = earlierTurns.slice(-6).reverse().map((m) => (m.role === 'user' ? nameIn(m.content) : '')).find(Boolean) ?? '';
+  /** Reply, and remember the exchange. `stored` is what memory keeps as the reply's source (defaults to the tool). */
+  const send = async (payload: Reply, stored: string | null = payload.source) => {
+    await remember(ctx.organizationId, ctx.userId, question, payload, stored);
     res.json(payload);
   };
   const allowedTools = await withTenant(ctx.organizationId, (tx) => availableTools(tx, ctx));
@@ -164,16 +169,19 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
     await send({ reply: reply.slice(0, 4000), navigation: null, model: env.OLLAMA_MODEL, source: tool });
   };
 
-  // ── step 0: the usual data questions are recognised without the model (exact and fast) ──
-  const intent = detectIntent(question, allowedTools);
-  if (intent) {
-    // "uski attendance?" — no name in a follow-up: use the person from the previous question
-    if ('name' in intent.args && !intent.args.name) {
-      // only recent turns — a name from long ago is probably not who they mean now
-      const earlier = earlierTurns.slice(-6).reverse().find((m) => m.role === 'user' && nameIn(m.content));
-      if (earlier) intent.args.name = nameIn(earlier.content);
-    }
-    await answerFromData(intent.tool, intent.args);
+  // ── step 0: data conversations are handled without the model (exact and fast): run the tool, ask back
+  //    which class / student when that is missing, or finish the question Jarvis asked last ──
+  const turn = planTurn(question, allowedTools, staffTools(ctx), lastSource, lastName);
+  if (turn?.kind === 'run') {
+    await answerFromData(turn.tool, turn.args);
+    return;
+  }
+  if (turn?.kind === 'ask') {
+    await send({ reply: turn.text, navigation: null, model: env.OLLAMA_MODEL, source: null, expectsReply: true }, `${ASK_PREFIX}${turn.topic}`);
+    return;
+  }
+  if (turn?.kind === 'cancel') {
+    await send({ reply: turn.text, navigation: null, model: env.OLLAMA_MODEL, source: null });
     return;
   }
 

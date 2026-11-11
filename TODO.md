@@ -18,7 +18,11 @@
 - [x] Region office: 18 built-in region-level roles (assistant regional director, academic / subject / exam / training / counselling coordinators, inspector, accounts officer, auditor, HR officer, admissions, purchase, transport, infrastructure, IT, sports, PR, office staff) — each sees only their region's schools; demo: the Lucknow region office (`lko.*`).
 - [x] Group office: 14 more built-in head-office / cluster roles (director, secretary, treasurer, trustee, admissions, purchase, IT, compliance, auditor, inspection, transport, marketing, training, cluster head) and a Group portal with the Group Dashboard (schools side by side, region totals, targets flagged, CSV); demo: `npm run seed:group` makes `greenwood` a group of three schools in two regions.
 
+- [x] Jarvis assistant: fast browser speech + private on-device Whisper, “Hey Jarvis” hands-free, read-only answers from ERP data per role (fees, attendance, marks, contacts, absentees, defaulters, staff, leave, stock, library, summary), asks back for a missing class / student and keeps the topic, 10-minute server memory, `npm run test:assistant` (40 checks); `npm run dev:mobile` for phones (HTTPS).
+
 ## Next
+
+- [ ] **Jarvis:** more data (timetable, homework, transport, hostel, salary slips for the person themself, exam schedule); actions with a confirm step (approve a leave, record a fee payment, send a notice); “yaad rakho …” long-term preferences (e.g. “meri class 10 B hai”); pick among students with the same name (“10 B wala”); faster model on a server with a GPU for open-ended questions.
 
 - [ ] **Security:** change the `sa` password (it was shared in chat); keep a copy of `DATA_ENCRYPTION_KEY` somewhere safe (without it encrypted Aadhaar / PAN / bank details cannot be read); use a real TLS certificate instead of `trustServerCertificate=true` in production.
 - [ ] `npm audit` (backend) reports `@azure/msal-node` through `mssql` → `tedious` → `@azure/identity`; it is used only for Azure AD sign-in, which the API does not use. Update when `@azure/identity` ships a fixed version.

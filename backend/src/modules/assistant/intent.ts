@@ -32,6 +32,9 @@ class section sir madam maam mam teacher staff employee leave chhutti chutti
 school aur sab sabhi sabse zyada jyada adhik kul pe par wala wali wale ji list kitno kaunse konsa konsi
 overdue defaulter defaulters summary overview haal status report collection batana chahiye janna
 uski uska uske iski iska iske unki unka unke inki inka inke usko isko unko inko vo wo woh unhone usne
+jarvis jarvish jervis hey hello hi namaste mujhe muje mujko humko hume dekhna dekhni dekhne dekho dekh dikhao dikha dikhana
+chahiye chaiye karo kar karna kariye do de dena dijiye bhai yaar sir maam bas wala wali ok okay accha theek thik haan han ha
+abhi zara sa vala vali pata malum maloom maaloom kuch koi samjha samajh samjhe hmm umm
 the of for what is how much tell me show give a an and or in on with please
 `.split(/\s+/).filter(Boolean));
 
@@ -164,4 +167,112 @@ export function formatAnswer(tool: string, data: unknown): string | null {
     default:
       return null;
   }
+}
+
+// ── conversation: asking back, remembering the open question and the topic ──────
+
+/** What a conversation is about, so "aur Riya ki?" or "10 B ki dikhao" can be finished later. */
+export type Topic = 'attendance' | 'fees' | 'marks' | 'contact' | 'staff';
+
+const TOPIC_OF: Record<string, Topic> = {
+  class_attendance: 'attendance', student_attendance: 'attendance',
+  student_fees: 'fees', fee_defaulters: 'fees',
+  student_marks: 'marks', find_student: 'contact', find_staff: 'staff',
+};
+
+/** Saved with Jarvis's question in memory (AssistantMessage.source), e.g. "ask:attendance". */
+export const ASK_PREFIX = 'ask:';
+
+const CANCEL = /^(chhodo|chodo|chhod do|chod do|rehne do|rahne do|cancel|kuch nahi|koi nahi|mat karo|bas|stop|nevermind|never mind)\b/;
+const PRONOUN = /\b(uski|uska|uske|iski|iska|iske|unki|unka|unke|inki|inka|inke|usko|isko|unko|inko)\b/;
+
+function askText(topic: Topic, staffTools: string[], again: boolean) {
+  const lead = again ? 'Samajh nahi aaya. ' : '';
+  switch (topic) {
+    case 'attendance':
+      return `${lead}Kaunsi class ki attendance dekhni hai? Jaise “10 A”. Kisi ek student ki chahiye to uska naam batayein.`;
+    case 'fees':
+      return staffTools.includes('fee_defaulters')
+        ? `${lead}Kis student ki fees dekhni hai? Naam batayein — ya class bolein (jaise “10 B”), us class mein kiski fees baaki hai wo bata dunga.`
+        : `${lead}Kis student ki fees dekhni hai? Naam batayein.`;
+    case 'marks':
+      return `${lead}Kis student ke marks dekhne hain? Naam batayein.`;
+    case 'contact':
+      return `${lead}Kis student ki details chahiye? Naam batayein.`;
+    case 'staff':
+      return `${lead}Kis staff member ki details chahiye? Naam batayein.`;
+  }
+}
+
+/** The tool for a topic once we know the class or the person. */
+function resolveTopic(topic: Topic, name: string, className: string | null, allowed: string[]): Intent | null {
+  switch (topic) {
+    case 'attendance':
+      if (className && !name) return { tool: 'class_attendance', args: { className } };
+      return name ? { tool: 'student_attendance', args: { name } } : null;
+    case 'fees':
+      if (className && !name && allowed.includes('fee_defaulters')) return { tool: 'fee_defaulters', args: { className } };
+      return name ? { tool: 'student_fees', args: { name } } : null;
+    case 'marks':
+      return name ? { tool: 'student_marks', args: { name } } : null;
+    case 'contact':
+      return name ? { tool: 'find_student', args: { name } } : null;
+    case 'staff':
+      return name ? { tool: 'find_staff', args: { name } } : null;
+  }
+}
+
+/** Does this answer still lack the class / person it needs (and is this user someone who must say which)? */
+function missingTopic(intent: Intent, staffTools: string[]): Topic | null {
+  const topic = TOPIC_OF[intent.tool];
+  if (!topic) return null;
+  const perStudent = ['student_attendance', 'student_fees', 'student_marks', 'find_student'].includes(intent.tool);
+  // parents and students: no name means their own child, so nothing to ask
+  if (perStudent && !intent.args.name && staffTools.includes(intent.tool)) return topic;
+  if (intent.tool === 'find_staff' && !intent.args.name) return topic;
+  return null;
+}
+
+export type Turn =
+  | { kind: 'run'; tool: string; args: Record<string, unknown> }
+  | { kind: 'ask'; text: string; topic: Topic }
+  | { kind: 'cancel'; text: string }
+  | null;
+
+/**
+ * Decides what to do with a message, given what Jarvis said last:
+ *   lastSource — the source saved with Jarvis's previous reply: a data tool ("student_fees") or an open
+ *                question ("ask:fees"); lastName — the person talked about in the recent turns.
+ * Returns null when it is not a data conversation (the AI model handles it).
+ */
+export function planTurn(question: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string): Turn {
+  const q = normalize(question);
+  const pending = lastSource?.startsWith(ASK_PREFIX) ? (lastSource.slice(ASK_PREFIX.length) as Topic) : null;
+  const lastTopic = pending ?? (lastSource ? TOPIC_OF[lastSource] ?? null : null);
+
+  if (pending && CANCEL.test(q)) return { kind: 'cancel', text: 'Theek hai, chhod diya. Aur kuch poochhna ho to boliye.' };
+  // "marks page kholo" — opening a page, even in the middle of a conversation: the model handles it
+  if (/\b(page|screen|menu|kholo|khol|kholiye|open|navigate|le chalo)\b/.test(q)) return null;
+
+  const intent = detectIntent(question, allowed);
+  if (intent) {
+    // "uski attendance?" — the person from the recent conversation
+    if ('name' in intent.args && !intent.args.name && PRONOUN.test(q) && lastName) intent.args.name = lastName;
+    const missing = missingTopic(intent, staffTools);
+    if (missing) return { kind: 'ask', text: askText(missing, staffTools, false), topic: missing };
+    return { kind: 'run', ...intent };
+  }
+
+  if (!lastTopic) return null;
+  const words = q.split(' ').filter(Boolean);
+  const name = nameIn(question) || (PRONOUN.test(q) ? lastName : '');
+  const className = classIn(question);
+  // an answer to Jarvis's question, or a short follow-up like "aur Riya ki?" / "10 B ki dikhao"
+  if (pending || words.length <= 6) {
+    const resolved = resolveTopic(lastTopic, name, className, allowed);
+    if (resolved) return { kind: 'run', ...resolved };
+  }
+  // still not understood: ask once more if it was a short reply to our question; otherwise let the model try
+  if (pending && words.length <= 6) return { kind: 'ask', text: askText(pending, staffTools, true), topic: pending };
+  return null;
 }

@@ -375,6 +375,9 @@ export function VoiceAssistant() {
     return () => { active = false; };
   }, [open, modelStatus]);
 
+  const awaitingAnswerRef = useRef(false);
+  const listenAfterReplyRef = useRef(false);
+
   const askAssistant = async (question: string, handsFree = false) => {
     const text = question.trim();
     if (!text || thinking) return;
@@ -386,7 +389,7 @@ export function VoiceAssistant() {
     // the server trims this further; a long prompt is what makes a CPU-only model slow
     const pageText = (document.querySelector("main")?.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 6_000);
     try {
-      const result = await api.post<{ reply: string; navigation: PageLink | null; model: string; source: string | null }>("/assistant/chat", {
+      const result = await api.post<{ reply: string; navigation: PageLink | null; model: string; source: string | null; expectsReply?: boolean }>("/assistant/chat", {
         // the server reads the saved memory; this short copy is only used when nothing is saved yet
         messages: nextChat.slice(-12).map(({ role, content }) => ({ role, content })),
         pagePath: location.pathname,
@@ -406,6 +409,10 @@ export function VoiceAssistant() {
         setTarget(result.navigation);
         setMessage(result.reply);
       }
+      // Jarvis asked something back ("Kaunsi class?"): the next sentence is the answer, not a page command,
+      // and in hands-free mode it listens again by itself once it has finished speaking
+      awaitingAnswerRef.current = !!result.expectsReply;
+      if (result.expectsReply && handsFree) listenAfterReplyRef.current = true;
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -429,7 +436,9 @@ export function VoiceAssistant() {
       setMessage("Attendance preview ready hai. Save karne se pehle details verify karein.");
       return;
     }
-    const page = findPage(heard);
+    // answering Jarvis's question ("class 10 A ki dikhao") is not a page command — unless a page is named
+    const answering = awaitingAnswerRef.current && !/\b(page|kholo|khol|open|navigate)\b|खोल|पेज/u.test(normalize(heard));
+    const page = answering ? null : findPage(heard);
     const navigationRequest = /open|show|go to|navigate|khol|khul|dikha|dikhaiye|खोल|दिखा|जाओ|पेज/u.test(normalize(heard));
     if (page && navigationRequest && handsFree) {
       navigate(page.href);
@@ -531,6 +540,32 @@ export function VoiceAssistant() {
       setWakeTick((tick) => tick + 1);
     }
   };
+
+  // Jarvis asked back in hands-free mode: once it has finished speaking, listen for the answer
+  // (no need to say "Hey Jarvis" again)
+  useEffect(() => {
+    if (thinking || listening || !listenAfterReplyRef.current) return;
+    listenAfterReplyRef.current = false;
+    const Recognition = browserRecognition();
+    if (!Recognition || engine !== "browser") return;
+    let speechStarted = false;
+    let waited = 0;
+    let timer = 0;
+    const check = () => {
+      const speaking = "speechSynthesis" in window && window.speechSynthesis.speaking;
+      if (speaking) speechStarted = true;
+      waited += 250;
+      // speech finished, or it never started (voice replies off) — or give up waiting after 15 s
+      if ((!speaking && (speechStarted || waited >= 1_500)) || waited >= 15_000) {
+        startBrowserListening(Recognition, true);
+        return;
+      }
+      timer = window.setTimeout(check, 250);
+    };
+    timer = window.setTimeout(check, 250);
+    return () => window.clearTimeout(timer);
+    // startBrowserListening only uses refs and setters
+  }, [thinking, listening, engine]);
 
   const busy = listening || thinking || transcribing || savingAttendance;
   useEffect(() => {
