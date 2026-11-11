@@ -5,6 +5,8 @@
  * school totals) are understood here and answered word for word from the database.
  */
 
+import { matchList } from './erp-read.js';
+
 const KEYWORDS = {
   fees: /\b(fees?|fess|फीस|baa?ki|bakaya|due|dues|outstanding|bhugtan|jama)\b/u,
   defaulters: /\b(sabse (zyada|jyada|adhik)|defaulters?|kis(ki|ke|ka)?|kaun kaun|list|sab(hi)? (students|bachche))\b/u,
@@ -44,7 +46,11 @@ message salary payslip slip tankhwah vetan address email timing timings
 cash nakad upi cheque check card online collect receive record lo le lijiye payment
 approve approved reject rejected manjoor manzoor sweekar accept naamanjoor namanjoor asweekar mana request application arzi
 good morning suprabhat briefing update kaunsi kaunsa konse kaun-si time samay
-bacchon bachchon baccho bachcho bacchon vidyarthiyon studenton logon
+bacchon bachchon baccho bachcho bacchon vidyarthiyon studenton logon bache bachhe bachey bacha baccha ladke ladkiyan ladka ladki
+strength ginti sankhya total
+dono donon aur bhi sath saath usne isne unhone inhone use ise unhe inhe di diya diye bhari bhara fail failed kamzor weak
+raha rahi rahe gaya gayi kaisa kaisi achha accha acchi kharab ranking compare baare bare profile poori puri
+thank thanks shukriya dhanyavaad bye alvida hello namaste kaun tum aap
 `.split(/\s+/).filter(Boolean));
 
 export type Intent = { tool: string; args: Record<string, unknown> };
@@ -61,8 +67,45 @@ export function classIn(text: string): string | null {
   return g ? g[1] : null;
 }
 
-/** The words left once question words and the class are removed — the person's name, if any. */
-export function nameIn(text: string): string {
+/** Real name words of the people the user may ask about (set while planTurn runs). */
+let activeNames: Set<string> | null = null;
+
+/** One typing / hearing slip: "akash" ~ "aakash", "riyaa" ~ "riya" (only for longer words). */
+function oneEditApart(a: string, b: string) {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else { i++; j++; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+/**
+ * The person's name in a question. With the name index: only words that are real names in the school
+ * (or one slip away from one) — so "di ya nahi", "fail" or "thank you" are never taken as a name.
+ * Without it: the words left once question words and the class are removed.
+ */
+export function nameIn(text: string, names: Set<string> | null = activeNames): string {
+  if (names) {
+    let t = normalize(text);
+    const cls = t.match(/\b(?:class\s*)?(\d{1,2}|lkg|ukg|nursery)\s*[- ]?\s*([a-h])?\b/);
+    if (cls) t = t.replace(cls[0], ' ');
+    const found: string[] = [];
+    for (const word of t.split(' ')) {
+      if (word.length < 3 || /^\d+$/.test(word) || STOP.has(word)) continue;
+      if (names.has(word)) { found.push(word); continue; }
+      if (word.length >= 5) {
+        for (const name of names) if (name.length >= 5 && oneEditApart(word, name)) { found.push(name); break; }
+      }
+    }
+    return [...new Set(found)].slice(0, 3).join(' ');
+  }
   let t = normalize(text);
   const cls = t.match(/\b(?:class\s*)?(\d{1,2}|lkg|ukg|nursery)\s*[- ]?\s*([a-h])?\b/);
   if (cls) t = t.replace(cls[0], ' ');
@@ -137,7 +180,13 @@ export function detectIntent(question: string, allowed: string[]): Intent | null
   if (/\b(good morning|suprabhat|briefing|aaj ka (summary|update|haal|report|plan)|din ka summary|aaj kya (hai|chal raha))\b/.test(q)) return pick('daily_briefing');
   if (/\b(timetable|time table|schedule|routine|period|periods)\b/.test(q) && !/\b(exam|pariksha|date ?sheet)\b/.test(q)) return pick('timetable', { className, date: dateIn(question) });
   if (/\b(homework|home work|assignments?|grih ?karya)\b/.test(q)) return pick('homework', { className });
-  if (/\b(date ?sheet|exam|exams|pariksha|paper)\b/.test(q) && /\b(kab|date|schedule|upcoming|aane wal\w*|agl\w|next|shuru|hone wal\w*|sheet)\b/.test(q)) return pick('exam_schedule', { className });
+  if (/\b(date ?sheet|exam|exams|pariksha|paper)\b/.test(q) && /\b(kab|date|schedule|upcoming|aane wal\w*|agl\w|next|shuru|hone wal\w*|sheet|kal|aaj|parso|kaunsa|kaunsi|konsa|konsi)\b/.test(q) && !/\b(marks?|result|number aaye|kitne number|fail|pass)\b/.test(q)) {
+    // "kal / aaj / parso / monday ko kaunsa exam" asks about that one day
+    const namedDay = /\b(aaj|kal|parso|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|somvar|mangalvar|budhvar|guruvar|shukravar|shanivar|ravivar)\b/.test(q);
+    return pick('exam_schedule', { className, ...(namedDay ? { date: dateIn(question) } : {}) });
+  }
+  if (has('attendance') && /\b(sabse (kam|zyada|jyada|achhi|acchi|kharab|buri|kharaab)|ranking|compare|kis class (ki|mein))\b/.test(q)) return pick('attendance_ranking');
+  if (/\b(fail|failed|kamzor|weak|kam marks|pass nahi)\b/.test(q)) return pick('failing_students', { className });
   if (/\b(bus|van|transport|route|pickup|driver|gaadi)\b/.test(q)) return pick('transport', { name });
   if (/\b(holidays?|vacation|chhuttiyan|chuttiyan|school band|agli (chhutti|chutti)|next holiday|chhutti kab|chutti kab)\b/.test(q) && !/\b(kaun|staff|teacher|leave|pe hai|par hai)\b/.test(q)) return pick('holidays');
   if (/\b(salary|payslip|pay slip|tankhwah|vetan)\b/.test(q)) return pick('my_payslip');
@@ -151,8 +200,16 @@ export function detectIntent(question: string, allowed: string[]): Intent | null
   if (has('library') && (has('libraryLate') || !name)) return pick('library_overdue');
   if (has('stock')) return pick('low_stock');
   if (has('leave') && (has('staff') || !name || /\baaj\b|\bkaun\b/.test(q))) return pick('staff_leaves');
+  // "class 10 mein kitne bache hain", "10 A ki strength", "kitne ladke / ladkiyan"
+  const COUNT = /\bkitne\s+(bache|bachhe|bachche|bacche|bachey|bachcha|baccha|bacha|students?|vidyarthi|ladke|ladkiyan|ladkiya|log)\b|\b(strength|class size|students ki (ginti|sankhya)|bacchon ki (ginti|sankhya)|kitni (strength|sankhya))\b/;
+  if (COUNT.test(q) && !has('attendance') && !has('fees') && (className || !/\b(staff|teachers?)\b/.test(q))) {
+    if (allowed.includes('class_strength')) return pick('class_strength', { className });
+    return pick('school_summary');
+  }
   if (has('summary') && !has('fees')) return pick('school_summary');
 
+  // "Riya Sharma ka number do" — a phone number, not marks
+  if (/\bnumber\b/.test(q) && !/\b(kitne number|number aaye|number mile|roll number|admission number)\b/.test(q) && !has('fees')) return pick('find_student', { name });
   if (has('fees')) {
     if (has('defaulters') && (!name || /sabse|defaulter|kaun kaun|kiski|kiske/.test(q))) return pick('fee_defaulters', { className });
     if (!name && className && allowed.includes('fee_defaulters')) return pick('fee_defaulters', { className });
@@ -260,6 +317,11 @@ export function formatAnswer(tool: string, data: unknown): string | null {
     }
     case 'exam_schedule': {
       const p: Any[] = d.papers ?? [];
+      const paper = (x: Any) => `${x.subject} (${x.exam}, ${x.time}${x.classes ? `, ${x.classes}` : ''})`;
+      if (d.day) {
+        if (p.length) return `${d.day} ko exam: ${p.map(paper).join('; ')}.`;
+        return `${d.day} ko koi exam nahi hai.${d.next ? ` Agla exam: ${d.next.date} ${paper(d.next)}.` : ''}`;
+      }
       if (!p.length) return `${d.for === 'all classes' ? '' : `${d.for}: `}abhi koi aane wala exam nahi hai.`;
       return `Aane wale exams (${d.for}): ${p.slice(0, 8).map((x) => `${x.date} ${x.subject} (${x.exam}, ${x.time}${x.classes ? `, ${x.classes}` : ''})`).join('; ')}.`;
     }
@@ -284,6 +346,29 @@ export function formatAnswer(tool: string, data: unknown): string | null {
     }
     case 'daily_briefing':
       return briefingText(d);
+    case 'attendance_ranking': {
+      const c: Any[] = d.classes ?? [];
+      if (!c.length) return 'Pichhle 30 din mein kisi class ki attendance record nahi hui.';
+      const low = c.slice(0, 3).map((x) => `${x.class} ${x.percent}%`).join(', ');
+      const high = [...c].reverse().slice(0, 2).map((x) => `${x.class} ${x.percent}%`).join(', ');
+      return `Pichhle 30 din mein sabse kam attendance: ${low}. Sabse achhi: ${high}.`;
+    }
+    case 'class_strength': {
+      const rows: Any[] = d.sections ?? [];
+      const split = (r: Any) => (r.boys || r.girls ? ` (${r.boys} ladke, ${r.girls} ladkiyan)` : '');
+      if (d.for === 'school') {
+        const byGrade = new Map<string, number>();
+        for (const r of rows) byGrade.set(r.grade, (byGrade.get(r.grade) ?? 0) + r.total);
+        return `School mein kul ${d.total} bachche hain${split(d)}. Class-wise: ${[...byGrade.entries()].map(([g, n]) => `${g} — ${n}`).join(', ')}.`;
+      }
+      if (rows.length === 1) return `${rows[0].class} mein ${rows[0].total} bachche hain${split(rows[0])}.`;
+      return `${d.for} mein kul ${d.total} bachche hain${split(d)}: ${rows.map((r) => `${r.class} — ${r.total}`).join(', ')}.`;
+    }
+    case 'failing_students': {
+      const st: Any[] = d.students ?? [];
+      if (!st.length) return `${d.exam}${d.class ? ` (${d.class})` : ''} mein koi bachcha fail nahi hai.`;
+      return `${d.exam}${d.class ? ` (${d.class})` : ''} mein ${d.totalFailing} bachche kisi subject mein fail / absent: ${st.slice(0, 8).map((x) => `${x.name} (${x.class ?? '-'}: ${list(x.subjects, 3)})`).join(', ')}.`;
+    }
     case 'leave_decision':
     case 'send_notice':
     case 'collect_fee':
@@ -342,8 +427,13 @@ const TOPIC_OF: Record<string, Topic> = {
 /** Saved with Jarvis's question in memory (AssistantMessage.source), e.g. "ask:attendance". */
 export const ASK_PREFIX = 'ask:';
 
+/** "student add karo", "book issue kar do", "marks update karo" — asking for a change. */
+export const CHANGE_WORDS = /\b(karo|kar do|kar dijiye|kariye|bana do|banao|add karo|add kar do|jodo|jod do|delete|hatao|hata do|update karo|badlo|badal do|issue karo|issue kar do|save karo|mark karo|lagao|laga do|cancel karo|create karo|edit karo)\b/i;
+/** Changes Jarvis prepares itself (with a confirm card). */
+const ACTION_TOOLS = new Set(['leave_decision', 'send_notice', 'collect_fee']);
+
 const CANCEL = /^(chhodo|chodo|chhod do|chod do|rehne do|rahne do|cancel|kuch nahi|koi nahi|mat karo|bas|stop|nevermind|never mind)\b/;
-const PRONOUN = /\b(uski|uska|uske|iski|iska|iske|unki|unka|unke|inki|inka|inke|usko|isko|unko|inko)\b/;
+const PRONOUN = /\b(uski|uska|uske|iski|iska|iske|unki|unka|unke|inki|inka|inke|usko|isko|unko|inko|usne|isne|unhone|inhone|use|ise|unhe|inhe)\b/;
 
 function askText(topic: Topic, staffTools: string[], again: boolean) {
   const lead = again ? 'Samajh nahi aaya. ' : '';
@@ -399,7 +489,61 @@ export type Turn =
   | { kind: 'remember'; key: string; value: string; text: string }
   | { kind: 'forget'; text: string }
   | { kind: 'recall' }
+  | { kind: 'chat'; text: string }
+  | { kind: 'multi'; steps: Intent[] }
   | null;
+
+/** Greetings, thanks, "who are you", "what can you do" — answered at once, without the AI model. */
+function smallTalk(q: string, allowed: string[], who: string): string | null {
+  const name = who.replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s+/i, '').split(/\s+/)[0] ?? '';
+  const hi = name ? ` ${name}` : '';
+  if (/^(hi+|hello|helo|hey|namaste|namaskar|pranam|good (afternoon|evening))( jarvis)?$/.test(q)) {
+    return `Namaste${hi}! Boliye, kya dekhna hai? Jaise “aaj ka briefing”, “Aakash ki fees” ya “10 A ka timetable”.`;
+  }
+  if (/\b(kaise ho|kaise hain|kaisi ho|kaisa hai|kya haal|how are you|sab theek)\b/.test(q) && q.split(' ').length <= 6) {
+    return `Main bilkul theek hoon, shukriya${hi}! Aap boliye, kya madad karun?`;
+  }
+  if (/\b(tum kaun|aap kaun|kaun ho|who are you|tumhara naam|aapka naam|apna naam)\b/.test(q)) {
+    return 'Main Jarvis hoon — is school ERP ka assistant. Aap bolkar ya likhkar school ka data poochh sakte hain, aur kuch kaam confirm karke karwa sakte hain.';
+  }
+  if (/\b(kya kya kar|kya kar sakte|kya kar sakti|what can you do|help|madad kaise|kya poochh sakt|kya puch sakt)\b/.test(q)) {
+    const can: string[] = [];
+    if (allowed.includes('student_fees')) can.push('kisi bachche ki fees, attendance, marks aur parents ka number');
+    if (allowed.includes('class_attendance')) can.push('class mein aaj kaun absent hai, kis class ki attendance sabse kam hai');
+    if (allowed.includes('fee_defaulters')) can.push('kiski fees baaki hai');
+    if (allowed.includes('failing_students')) can.push('kaun se bacche fail hain');
+    if (allowed.includes('timetable')) can.push('timetable, homework, exam date sheet, chhuttiyan aur notices');
+    if (allowed.includes('daily_briefing')) can.push('“good morning” bolne par aaj ka briefing');
+    if (allowed.includes('leave_decision')) can.push('leave approve / reject');
+    if (allowed.includes('send_notice')) can.push('notice bhejna');
+    if (allowed.includes('collect_fee')) can.push('fees jama karna');
+    can.push('“yaad rakho …” se baatein yaad rakhna');
+    return `Main ye kar sakta hoon: ${can.join('; ')}. Kaam wali cheezein confirm karne ke baad hi hoti hain.`;
+  }
+  if (/^(thank you|thanks|thank u|thx|shukriya|dhanyavaad|dhanyawad|bahut (accha|badhiya))( jarvis| ji)?$/.test(q)) return 'Aapka swagat hai! Aur kuch chahiye to boliye.';
+  if (/^(ok |okay |chalo )?(bye|alvida|tata|good night|see you)( jarvis)?$/.test(q)) return 'Theek hai, phir milte hain! Zaroorat ho to “Hey Jarvis” boliye.';
+  if (/^(ok|okay|theek hai|thik hai|accha|achha|hmm+|samajh gaya|samajh gayi|got it)$/.test(q)) return 'Theek hai. Aur kuch?';
+  return null;
+}
+
+const OVERVIEW = /\b(ke baare mein|ke bare me|ke baare me|ki details|ka profile|ki profile|sab kuch|poori jaankari|puri jankari|full details|report card)\b/;
+const PERSON_TOPICS: [RegExp, string][] = [
+  [/\b(fees?|baaki|jama|di ya nahi|bhari)\b/, 'student_fees'],
+  [/\b(attendance|hazri|haziri|absent|present)\b/, 'student_attendance'],
+  [/\b(marks?|result|number aaye|kitne number)\b/, 'student_marks'],
+  [/\b(phone|mobile|contact|papa|mummy|parents?|number do)\b/, 'find_student'],
+  [/\b(bus|van|transport|pickup)\b/, 'transport'],
+];
+
+/** "uski fees aur attendance dono", "Aakash ke baare mein batao" → several answers about one person. */
+function personQuestions(q: string, person: string, allowed: string[]): Intent[] | null {
+  if (!person || /\b(sir|madam|maam|teacher|staff)\b/.test(q)) return null;
+  const tools = OVERVIEW.test(q)
+    ? ['find_student', 'student_fees', 'student_attendance', 'student_marks']
+    : PERSON_TOPICS.filter(([pattern]) => pattern.test(q)).map(([, tool]) => tool);
+  const usable = tools.filter((tool) => allowed.includes(tool));
+  return usable.length >= 2 || (OVERVIEW.test(q) && usable.length) ? usable.map((tool) => ({ tool, args: { name: person } })) : null;
+}
 
 /** Saved with a reply that matched several people ("pick:student_fees|CASH"), so "10 B wali" can choose. */
 export const PICK_PREFIX = 'pick:';
@@ -410,7 +554,16 @@ export const PICK_PREFIX = 'pick:';
  *                question ("ask:fees"); lastName — the person talked about in the recent turns.
  * Returns null when it is not a data conversation (the AI model handles it).
  */
-export function planTurn(asked: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string, myClass: string | null = null): Turn {
+export function planTurn(asked: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string, myClass: string | null = null, names: Set<string> | null = null, who = ''): Turn {
+  activeNames = names;
+  try {
+    return decideTurn(asked, allowed, staffTools, lastSource, lastName, myClass, who);
+  } finally {
+    activeNames = null;
+  }
+}
+
+function decideTurn(asked: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string, myClass: string | null, who: string): Turn {
   // "meri class" → the class the person told Jarvis to remember, or the one they are class teacher of
   const question = myClass ? asked.replace(/\b(meri|mere|mera|hamari|hamare|apni|apne|my)\s+class\b/giu, `class ${myClass}`) : asked;
   const q = normalize(question);
@@ -435,6 +588,14 @@ export function planTurn(asked: string, allowed: string[], staffTools: string[],
 
   if ((pending || picking) && CANCEL.test(q)) return { kind: 'cancel', text: 'Theek hai, chhod diya. Aur kuch poochhna ho to boliye.' };
 
+  const chat = smallTalk(q, allowed, who);
+  if (chat) return { kind: 'chat', text: chat };
+
+  // several things about one person at once
+  const person = nameIn(question) || (PRONOUN.test(q) ? lastName : '');
+  const several = personQuestions(q, person, allowed);
+  if (several) return { kind: 'multi', steps: several };
+
   // several people matched last time: "10 B wali" / "Riya Sharma" picks one
   if (picking) {
     const [tool, extra] = picking.split('|');
@@ -453,20 +614,33 @@ export function planTurn(asked: string, allowed: string[], staffTools: string[],
   // "marks page kholo" — opening a page, even in the middle of a conversation: the model handles it
   if (!(NOTICE_WORD.test(q) && SEND_WORD.test(q)) && /\b(page|screen|menu|kholo|khol|kholiye|open|navigate|le chalo)\b/.test(q)) return null;
 
+  // a named ERP list ("visitors", "admission enquiries", "vendors", "audit log") — read it rather than
+  // guessing a student question from a stray word like "aaye" or "admission"
+  const list = matchList(question);
+  const change = CHANGE_WORDS.test(q);
+
   const intent = detectIntent(question, allowed);
   if (intent) {
+    // "book issue kar do": a change — never answered with a read tool (the route offers the page)
+    if (change && !ACTION_TOOLS.has(intent.tool)) return null;
     // "uski attendance?" — the person from the recent conversation
     if ('name' in intent.args && !intent.args.name && PRONOUN.test(q) && lastName) intent.args.name = lastName;
     const missing = missingTopic(intent, staffTools);
-    if (missing === 'attendance' && myClass) return { kind: 'run', tool: 'class_attendance', args: { className: myClass } };
+    if (missing === 'attendance' && myClass && !list) return { kind: 'run', tool: 'class_attendance', args: { className: myClass } };
+    if (missing && list) return null;
     if (missing) return { kind: 'ask', text: askText(missing, staffTools, false), topic: missing };
+    // a per-person question with no person, from staff, when a list was named: the list
+    if (list && 'name' in intent.args && !intent.args.name && staffTools.includes(intent.tool)) return null;
     return { kind: 'run', ...intent };
   }
 
+  if (change) return null;
   if (!lastTopic) return null;
   const words = q.split(' ').filter(Boolean);
   const name = nameIn(question) || (PRONOUN.test(q) ? lastName : '');
   const className = classIn(question);
+  // a new question about an ERP list is not an answer to the earlier one
+  if (list && !name && !className) return null;
   // an answer to Jarvis's question, or a short follow-up like "aur Riya ki?" / "10 B ki dikhao"
   if (pending || words.length <= 6) {
     const resolved = resolveTopic(lastTopic, name, className, allowed);

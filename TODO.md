@@ -20,6 +20,7 @@
 
 - [x] Jarvis assistant: fast browser speech + private on-device Whisper, “Hey Jarvis” hands-free, read-only answers from ERP data per role (fees, attendance, marks, contacts, absentees, defaulters, staff, leave, stock, library, summary), asks back for a missing class / student and keeps the topic, 10-minute server memory, `npm run test:assistant` (40 checks); `npm run dev:mobile` for phones (HTTPS).
 - [x] Jarvis, round 2: timetable, homework, exam date sheet, bus, holidays, notices, own salary slip, school contacts; good-morning briefing per role; confirmed actions (leave approve / reject, notice, counter fee payment) through the normal endpoints; “yaad rakho / bhool jao / kya yaad hai” (`AssistantNote`, migration 027); “10 B wali” picks among same-name students; per-person rate limit; 69 checks in `test:assistant`.
+- [x] Jarvis, round 3: reads any ERP list through the API as the person (60+ lists, permissions and audit log apply); class strength, attendance ranking, failing students; real-name matching, small talk, several answers at once, natural browser voice; changes without a confirm step open the right page; 96 checks in `test:assistant`.
 - [x] Deleting an expense now also removes its automatic ledger entry; the finance, procurement and HR tests remove theirs too (`npm run ledger:orphans` finds old leftovers).
 
 ## Next

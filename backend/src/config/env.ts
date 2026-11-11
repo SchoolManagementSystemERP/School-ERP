@@ -22,6 +22,8 @@ const schema = z.object({
   ASSISTANT_PAGE_CHARS: z.coerce.number().int().min(500).max(14_000).default(3_500),
   /** Jarvis forgets a conversation this many minutes after it was said (deleted from the database). */
   ASSISTANT_MEMORY_MINUTES: z.coerce.number().int().min(1).max(60 * 24 * 30).default(10),
+  /** Questions per minute per signed-in person. */
+  ASSISTANT_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
   /** Lets students / parents record "online" fee payments without a gateway — for demos only, never in production. */
   DEMO_PAYMENTS: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });

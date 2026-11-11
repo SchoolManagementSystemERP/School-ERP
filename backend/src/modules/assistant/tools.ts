@@ -629,13 +629,21 @@ export const TOOLS: Record<string, Tool> = {
       });
       const forGrades = grades.length ? papers.filter((p) => p.exam.gradeNames.split(',').map((g) => g.trim()).some((g) => grades.includes(g))) : papers;
       const subjects = await tx.subject.findMany({ where: { id: { in: forGrades.map((p) => p.subjectId) } }, select: { id: true, name: true } });
-      return {
-        for: grades.length ? grades.join(', ') : 'all classes',
-        papers: forGrades.slice(0, 12).map((p) => ({
+      const describe = (p: (typeof forGrades)[number]) => {
+        const classes = p.exam.gradeNames.split(',').map((g) => g.trim()).filter(Boolean);
+        return {
           exam: p.exam.name, date: toDateString(p.date), time: `${p.startTime}-${p.endTime}`,
           subject: subjects.find((s) => s.id === p.subjectId)?.name ?? '', maxMarks: Number(p.maxMarks),
-          ...(grades.length ? {} : { classes: p.exam.gradeNames }),
-        })),
+          ...(grades.length ? {} : { classes: classes.length >= 4 ? 'sab classes' : classes.join(', ') }),
+        };
+      };
+      // "kal kaunsa exam hai" — only that day; if there is none, say so and give the next one
+      const day = typeof args.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : null;
+      const onDay = day ? forGrades.filter((p) => toDateString(p.date) === day) : forGrades;
+      return {
+        for: grades.length ? grades.join(', ') : 'all classes',
+        ...(day ? { day, next: onDay.length ? null : forGrades[0] ? describe(forGrades[0]) : null } : {}),
+        papers: onDay.slice(0, 12).map(describe),
       };
     },
   },
@@ -854,7 +862,149 @@ export const TOOLS: Record<string, Tool> = {
       };
     },
   },
+
+  attendance_ranking: {
+    description: 'Classes ranked by student attendance over the last 30 days (lowest first).',
+    args: '{}',
+    staff: ['attendance.read', 'reports.view'],
+    run: async ({ tx, ctx }) => {
+      const branchIds = branchesFor(ctx, ['attendance.read', 'reports.view']);
+      const since = new Date(today().getTime() - 30 * DAY);
+      const sessions = await tx.attendanceSession.findMany({ where: { branchId: { in: branchIds }, date: { gte: since, lte: today() }, periodNo: null }, select: { id: true, sectionId: true } });
+      const counts = sessions.length
+        ? await tx.attendanceEntry.groupBy({ by: ['sessionId', 'status'], where: { sessionId: { in: sessions.map((s) => s.id) } }, _count: { _all: true } })
+        : [];
+      const sectionOf = new Map(sessions.map((s) => [s.id, s.sectionId]));
+      const bySection = new Map<string, { present: number; total: number; days: Set<string> }>();
+      for (const row of counts) {
+        const sectionId = sectionOf.get(row.sessionId)!;
+        const entry = bySection.get(sectionId) ?? { present: 0, total: 0, days: new Set<string>() };
+        entry.total += row._count._all;
+        if (row.status === 'PRESENT' || row.status === 'LATE') entry.present += row._count._all;
+        entry.days.add(row.sessionId);
+        bySection.set(sectionId, entry);
+      }
+      const sections = await tx.section.findMany({ where: { id: { in: [...bySection.keys()] } }, select: { id: true, name: true, grade: { select: { name: true } } } });
+      const classes = sections.map((s) => {
+        const c = bySection.get(s.id)!;
+        return { class: `${s.grade.name} ${s.name}`, percent: pct(c.present, c.total) ?? 0, days: c.days.size };
+      }).sort((a, b) => a.percent - b.percent);
+      return { days: 30, classes };
+    },
+  },
+
+  class_strength: {
+    description: 'How many students are in a class (each section, boys / girls), or in every class.',
+    args: '{"className":"10 or 10 A, optional"}',
+    staff: ['students.read', 'reports.view'],
+    run: async ({ tx, ctx, year }, args) => {
+      const branchIds = branchesFor(ctx, ['students.read', 'reports.view']);
+      const className = str(args.className);
+      const sections = className
+        ? await sectionIdsFor(tx, branchIds, className)
+        : await tx.section.findMany({ where: { branchId: { in: branchIds } }, select: { id: true, name: true, grade: { select: { name: true } } } });
+      if (!sections?.length) return { error: `“${className}” class nahi mili.` };
+      const enrollments = await tx.enrollment.findMany({
+        where: { academicYearId: year.id, status: 'ACTIVE', sectionId: { in: sections.map((s) => s.id) }, student: { status: 'ACTIVE' } },
+        select: { sectionId: true, student: { select: { gender: true } } },
+      });
+      const grades = await tx.grade.findMany({ where: { name: { in: [...new Set(sections.map((s) => s.grade.name))] }, branchId: { in: branchIds } }, select: { name: true, sortOrder: true } });
+      const order = new Map(grades.map((g) => [g.name, g.sortOrder]));
+      const rows = sections.map((s) => {
+        const mine = enrollments.filter((e) => e.sectionId === s.id);
+        return {
+          class: `${s.grade.name} ${s.name}`, grade: s.grade.name, total: mine.length,
+          boys: mine.filter((e) => e.student.gender === 'MALE').length, girls: mine.filter((e) => e.student.gender === 'FEMALE').length,
+        };
+      }).sort((a, b) => (order.get(a.grade) ?? 0) - (order.get(b.grade) ?? 0) || a.class.localeCompare(b.class));
+      return {
+        for: className ? rows.map((r) => r.grade).filter((g, i, all) => all.indexOf(g) === i).join(', ') : 'school',
+        total: rows.reduce((t, r) => t + r.total, 0),
+        boys: rows.reduce((t, r) => t + r.boys, 0), girls: rows.reduce((t, r) => t + r.girls, 0),
+        sections: rows,
+      };
+    },
+  },
+
+  failing_students: {
+    description: 'Students who failed or were absent in at least one paper of the latest published exam (optionally one class).',
+    args: '{"className":"10 A optional"}',
+    staff: ['marks.read'],
+    run: async ({ tx, ctx, year }, args) => {
+      const branchIds = branchesFor(ctx, ['marks.read']);
+      const exam = await tx.exam.findFirst({
+        where: { academicYearId: year.id, resultsPublished: true, OR: [{ branchId: null }, { branchId: { in: branchIds } }] },
+        orderBy: [{ publishedAt: 'desc' }], select: { id: true, name: true },
+      });
+      if (!exam) return { error: 'Is saal ka koi result abhi publish nahi hua.' };
+      const className = str(args.className);
+      const sections = className ? await sectionIdsFor(tx, branchIds, className) : null;
+      if (className && !sections?.length) return { error: `“${className}” class nahi mili.` };
+      const papers = await tx.examPaper.findMany({ where: { examId: exam.id }, select: { id: true, subjectId: true, passMarks: true } });
+      const marks = await tx.mark.findMany({
+        where: {
+          examPaperId: { in: papers.map((p) => p.id) }, branchId: { in: branchIds },
+          ...(sections ? { studentId: { in: (await tx.enrollment.findMany({ where: { academicYearId: year.id, sectionId: { in: sections.map((s) => s.id) } }, select: { studentId: true } })).map((e) => e.studentId) } } : {}),
+        },
+        select: { studentId: true, examPaperId: true, marks: true, isAbsent: true },
+      });
+      const paperOf = new Map(papers.map((p) => [p.id, p]));
+      const failed = new Map<string, string[]>();
+      for (const m of marks) {
+        const paper = paperOf.get(m.examPaperId)!;
+        if (m.isAbsent || m.marks === null || Number(m.marks) < Number(paper.passMarks)) failed.set(m.studentId, [...(failed.get(m.studentId) ?? []), paper.subjectId]);
+      }
+      const [students, subjects] = await Promise.all([
+        describeStudents(tx, year, [...failed.keys()]),
+        tx.subject.findMany({ where: { id: { in: papers.map((p) => p.subjectId) } }, select: { id: true, name: true } }),
+      ]);
+      const subjectName = new Map(subjects.map((s) => [s.id, s.name]));
+      return {
+        exam: exam.name, ...(className ? { class: sections!.map((s) => `${s.grade.name} ${s.name}`).join(', ') } : {}),
+        totalFailing: students.length,
+        students: students.slice(0, 15).map((s) => ({ name: s.name, class: s.class, subjects: (failed.get(s.id) ?? []).map((id) => subjectName.get(id) ?? '') })),
+      };
+    },
+  },
 };
+
+
+/** First / last / middle name words of the people this user may ask about, for recognising names in speech. */
+export type NameIndex = { words: Set<string> };
+const nameCache = new Map<string, { at: number; index: NameIndex }>();
+
+export async function knownNames(tx: Tx, ctx: RequestContext): Promise<NameIndex> {
+  const key = `${ctx.userId}|${ctx.activeBranchId ?? ''}`;
+  const cached = nameCache.get(key);
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.index;
+  const studentBranches = branchesFor(ctx, ['students.read', 'fees.read', 'fees.collect', 'attendance.read', 'marks.read', 'transport.manage']);
+  const staffBranches = branchesFor(ctx, ['staff.read', 'staff.write', 'leave.approve']);
+  const own = await ownStudentIds(tx, ctx);
+  // Parents and students: names of the whole school only for *recognising* a name, so "Aakash ki fees"
+  // gets "not found" instead of quietly answering about their own child. What they may *see* is still
+  // limited to their own children by the tools.
+  const ownBranches = own.length
+    ? [...new Set((await tx.student.findMany({ where: { id: { in: own } }, select: { branchId: true } })).map((s) => s.branchId))]
+    : [];
+  const nameBranches = [...new Set([...studentBranches, ...ownBranches])];
+  const [students, staff] = await Promise.all([
+    tx.student.findMany({
+      where: { status: 'ACTIVE', OR: [...(nameBranches.length ? [{ branchId: { in: nameBranches } }] : []), ...(own.length ? [{ id: { in: own } }] : [])] },
+      select: { firstName: true, middleName: true, lastName: true }, take: 20_000,
+    }),
+    staffBranches.length ? tx.staff.findMany({ where: { branchId: { in: staffBranches }, status: { not: 'RESIGNED' } }, select: { name: true }, take: 5_000 }) : Promise.resolve([]),
+  ]);
+  const words = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    for (const word of (value ?? '').toLowerCase().replace(/^(dr|mr|mrs|ms|shri|smt)\.?\s+/, '').split(/[^\p{L}]+/u)) if (word.length >= 3) words.add(word);
+  };
+  for (const s of students) { add(s.firstName); add(s.middleName); add(s.lastName); }
+  for (const s of staff) add(s.name);
+  const index = { words };
+  nameCache.set(key, { at: Date.now(), index });
+  if (nameCache.size > 500) nameCache.delete(nameCache.keys().next().value!);
+  return index;
+}
 
 /** Tools this user may call (by permission), for the model's menu. */
 export async function availableTools(tx: Tx, ctx: RequestContext) {

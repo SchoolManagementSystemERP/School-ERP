@@ -5,8 +5,9 @@ import { ctxOf } from '../../middleware/authenticate.js';
 import { AppError, badRequest } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
 import { withSystem, withTenant } from '../../db/prisma.js';
-import { availableTools, runTool, staffTools, TOOLS } from './tools.js';
-import { ASK_PREFIX, formatAnswer, nameIn, PICK_PREFIX, planTurn } from './intent.js';
+import { availableTools, knownNames, runTool, staffTools, TOOLS } from './tools.js';
+import { matchList, readList } from './erp-read.js';
+import { ASK_PREFIX, CHANGE_WORDS, formatAnswer, nameIn, PICK_PREFIX, planTurn } from './intent.js';
 
 export const assistantRouter = Router();
 
@@ -22,6 +23,31 @@ type Reply = { reply: string; navigation: unknown; model: string; source: string
 /** Actions are only prepared from clear spoken / typed commands, never picked by the AI model. */
 const ACTION_TOOLS = new Set(['leave_decision', 'send_notice', 'collect_fee']);
 const MAX_NOTES = 20;
+
+/** The visible menu link that best matches a sentence ("student add karo" → "Students"). */
+/** Everyday words → the words menu pages use. */
+const PAGE_WORDS: Record<string, string[]> = {
+  book: ['library', 'issue'], books: ['library'], kitab: ['library'], kitaab: ['library'], issue: ['issue', 'library'],
+  student: ['students', 'admission'], bachcha: ['students'], bachche: ['students'], admission: ['admission', 'students', 'enquir'],
+  teacher: ['staff'], karmchari: ['staff'], employee: ['staff'], fees: ['fee'], fee: ['fee'],
+  marks: ['marks', 'exam', 'result'], result: ['result', 'marks'], exam: ['exam'], attendance: ['attendance'], hazri: ['attendance'],
+  notice: ['notice', 'announcement', 'communication'], suchna: ['notice', 'announcement'], leave: ['leave'], chhutti: ['leave'],
+  salary: ['payroll', 'salary'], visitor: ['visitor', 'front'], vendor: ['vendor', 'procurement'], purchase: ['purchase', 'requisition', 'procurement'],
+  stock: ['stock', 'inventory', 'store'], saman: ['stock', 'inventory'], bus: ['transport'], hostel: ['hostel'], homework: ['homework', 'assignment'],
+  expense: ['expense'], kharcha: ['expense'], timetable: ['timetable'],
+};
+
+function bestLink(sentence: string, links: { href: string; label: string }[]) {
+  const said = sentence.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length >= 3);
+  const words = [...new Set([...said, ...said.flatMap((w) => PAGE_WORDS[w] ?? [])])];
+  let best: { link: { href: string; label: string }; score: number } | null = null;
+  for (const link of links) {
+    const label = link.label.toLowerCase();
+    const score = words.filter((w) => label.includes(w) || (w.length >= 5 && label.includes(w.slice(0, -1)))).length;
+    if (score && (!best || score > best.score)) best = { link, score };
+  }
+  return best?.link ?? null;
+}
 /** Replies about one person — the question before them names who "uska / uski" means. */
 const PERSON_SOURCES = /^(student_|find_|transport|collect_fee|leave_decision|ask:|pick:)/;
 
@@ -57,7 +83,7 @@ const chatLimiter = rateLimit({
   windowMs: 60_000,
   // most answers come straight from the database now; the limit guards the AI model and the database.
   // Per signed-in person — a whole school often shares one internet address.
-  limit: 60,
+  limit: env.ASSISTANT_RATE_PER_MINUTE,
   keyGenerator: (req) => ctxOf(req).userId,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
@@ -156,24 +182,26 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
     : body.messages.slice(0, -1);
   // what Jarvis said last: a data tool (the topic) or an open question ("ask:fees") still waiting for an answer
   const lastSource = saved[saved.length - 1]?.role === 'assistant' ? saved[saved.length - 1].source : null;
+  // the tools this user may use, and the real names of the people they may ask about
+  const [allowedTools, names] = await withTenant(ctx.organizationId, (tx) => Promise.all([availableTools(tx, ctx), knownNames(tx, ctx)]));
   // the person talked about recently, for "uski attendance?": only from recent questions that were about a
   // person (a notice text or a timetable question is not a name)
   let lastName = '';
+  const lastNameFrom = (text: string) => nameIn(text, names.words);
   if (saved.length) {
     const recent = saved.slice(-6);
     for (let i = recent.length - 1; i > 0 && !lastName; i--) {
       const reply = recent[i];
-      if (reply.role === 'assistant' && PERSON_SOURCES.test(reply.source ?? '') && recent[i - 1].role === 'user') lastName = nameIn(recent[i - 1].content);
+      if (reply.role === 'assistant' && PERSON_SOURCES.test(reply.source ?? '') && recent[i - 1].role === 'user') lastName = lastNameFrom(recent[i - 1].content);
     }
   } else {
-    lastName = earlierTurns.slice(-6).reverse().map((m) => (m.role === 'user' ? nameIn(m.content) : '')).find(Boolean) ?? '';
+    lastName = earlierTurns.slice(-6).reverse().map((m) => (m.role === 'user' ? lastNameFrom(m.content) : '')).find(Boolean) ?? '';
   }
   /** Reply, and remember the exchange. `stored` is what memory keeps as the reply's source (defaults to the tool). */
   const send = async (payload: Reply, stored: string | null = payload.source) => {
     await remember(ctx.organizationId, ctx.userId, question, payload, stored);
     res.json(payload);
   };
-  const allowedTools = await withTenant(ctx.organizationId, (tx) => availableTools(tx, ctx));
   // long-term memory ("yaad rakho"): the person's class, else the class they are class teacher of; free notes
   const { notes, myClass } = await withTenant(ctx.organizationId, async (tx) => {
     const rows = await tx.assistantNote.findMany({ where: { userId: ctx.userId }, orderBy: { updatedAt: 'asc' }, select: { key: true, value: true } });
@@ -206,13 +234,31 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
 
   // ── step 0: data conversations are handled without the model (exact and fast): run the tool, ask back
   //    which class / student when that is missing, or finish the question Jarvis asked last ──
-  const turn = planTurn(question, allowedTools, staffTools(ctx), lastSource, lastName, myClass);
+  const turn = planTurn(question, allowedTools, staffTools(ctx), lastSource, lastName, myClass, names.words, ctx.name);
   if (turn?.kind === 'run') {
     await answerFromData(turn.tool, turn.args);
     return;
   }
   if (turn?.kind === 'ask') {
     await send({ reply: turn.text, navigation: null, model: env.OLLAMA_MODEL, source: null, expectsReply: true }, `${ASK_PREFIX}${turn.topic}`);
+    return;
+  }
+  if (turn?.kind === 'chat') {
+    await send({ reply: turn.text, navigation: null, model: env.OLLAMA_MODEL, source: null });
+    return;
+  }
+  if (turn?.kind === 'multi') {
+    // several answers about one person ("fees aur attendance dono", "… ke baare mein batao")
+    const replies: string[] = [];
+    let firstError = '';
+    for (const step of turn.steps) {
+      const data = await withTenant(ctx.organizationId, (tx) => runTool(tx, ctx, step.tool, step.args, allowedTools));
+      const text = formatAnswer(step.tool, data);
+      if (!text) continue;
+      if ((data as { error?: string }).error) { firstError ||= text; continue; }
+      replies.push(text);
+    }
+    await send({ reply: (replies.length ? replies.join(' ') : firstError || 'Ye jaankari nahi mili.').slice(0, 4000), navigation: null, model: env.OLLAMA_MODEL, source: turn.steps[0].tool });
     return;
   }
   if (turn?.kind === 'cancel') {
@@ -246,6 +292,39 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
     const facts = [...(myClass ? [`aapki class ${myClass} hai`] : []), ...notes.map((n) => `“${n}”`)];
     await send({ reply: facts.length ? `Mujhe yaad hai: ${facts.join('; ')}.` : 'Abhi mujhe aapke baare mein kuch yaad nahi hai. “Yaad rakho meri class 10 B hai” jaisa boliye.', navigation: null, model: env.OLLAMA_MODEL, source: null });
     return;
+  }
+
+  // ── step 0b: anything else in the ERP ──
+  if (!/\b(page|screen|menu|kholo|khol|kholiye|open|navigate)\b/i.test(question)) {
+    // a change with no confirm step in Jarvis: never done by Jarvis — offer the page where it is done
+    if (CHANGE_WORDS.test(question)) {
+      const page = bestLink(question, body.links);
+      await send(page
+        ? { reply: `Ye kaam main khud nahi karta — ye “${page.label}” page par hota hai. Wahan le chalun?`, navigation: page, model: env.OLLAMA_MODEL, source: null }
+        : { reply: 'Ye kaam main khud nahi kar sakta. Menu mein us kaam ke page par jaakar karein — page ka naam boliye to main khol dunga.', navigation: null, model: env.OLLAMA_MODEL, source: null });
+      return;
+    }
+    // reading: the matching ERP list, fetched through the API as this person (its permissions apply)
+    const list = matchList(question);
+    if (list) {
+      const reply = await readList(list, question, {
+        port: req.socket.localPort ?? env.PORT,
+        authorization: req.get('authorization') ?? undefined,
+        branchId: req.get('x-branch-id') ?? undefined,
+      }, (ids) => withTenant(ctx.organizationId, async (tx) => {
+        // names for ids the API already returned to this person
+        const [students, staff] = await Promise.all([
+          tx.student.findMany({ where: { id: { in: ids } }, select: { id: true, firstName: true, middleName: true, lastName: true } }),
+          tx.staff.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }),
+        ]);
+        return new Map([
+          ...students.map((s) => [s.id.toLowerCase(), [s.firstName, s.middleName, s.lastName].filter(Boolean).join(' ')] as [string, string]),
+          ...staff.map((s) => [s.id.toLowerCase(), s.name] as [string, string]),
+        ]);
+      }));
+      await send({ reply, navigation: null, model: env.OLLAMA_MODEL, source: `erp:${list.path}` });
+      return;
+    }
   }
 
   // ── step 1: answer from the page, open a page, or pick a data tool ──

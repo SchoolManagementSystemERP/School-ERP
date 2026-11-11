@@ -5,6 +5,7 @@
  * Checks: answers come from the database, each role sees only what it may, memory works and can be
  * cleared, and other users never see someone's memory. The test users' memory is cleared at the end.
  */
+import "./assistant-test-env.js";
 import "dotenv/config";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.js";
@@ -216,6 +217,60 @@ async function main() {
   ok(paid.status === 201 && paid.body.receiptNo, "confirming records it through POST /fees/payments", paid.body);
   const parentCannot = await ask(parent, "Mere bachche ki fees cash mein jama karo");
   ok(!parentCannot.body.action, "a parent cannot record counter payments", parentCannot.body);
+
+  console.log("Natural conversation");
+  await call(principal, "DELETE", "/assistant/history");
+  for (const [said, expected] of [["Hello Jarvis", /Namaste/], ["kaise ho?", /theek hoon/], ["tum kaun ho?", /Jarvis/], ["tum kya kya kar sakte ho?", /kar sakta hoon/], ["thank you", /swagat/], ["ok bye", /milte hain/]] as const) {
+    const started = Date.now();
+    const reply = await ask(principal, said);
+    ok(expected.test(reply.body.reply) && Date.now() - started < 3_000, `“${said}” gets a quick friendly reply (no AI model)`, reply.body);
+  }
+  const notNames = await ask(principal, "kaunse bacche fail hain?");
+  ok(notNames.body.source === "failing_students" && !/naam ka koi student/.test(notNames.body.reply), "question words are never taken for a name (“kaunse bacche fail hain”)", notNames.body);
+  const hearingSlip = await ask(principal, "Akash ki fees");
+  ok(/Aakash Tiwari/.test(hearingSlip.body.reply), "a hearing slip still finds the name (“Akash” → Aakash)", hearingSlip.body);
+  const both = await ask(principal, "uski fees aur attendance dono batao");
+  ok(/fees/.test(both.body.reply) && /attendance/.test(both.body.reply), "“fees aur attendance dono” answers both", both.body);
+  const paidOrNot = await ask(principal, "usne fees di ya nahi?");
+  ok(paidOrNot.body.source === "student_fees" && /Aakash Tiwari/.test(paidOrNot.body.reply), "“usne fees di ya nahi?” is about the same student", paidOrNot.body);
+  const about = await ask(principal, "Riya Sharma ke baare mein batao");
+  ok(/Riya Sharma/.test(about.body.reply) && /fees/.test(about.body.reply) && /Exam|exam/.test(about.body.reply), "“… ke baare mein batao” gives an overview", about.body);
+  const number = await ask(principal, "Riya Sharma ka number do");
+  ok(number.body.source === "find_student", "“… ka number do” is the contact, not marks", number.body);
+  const strength = await ask(principal, "class 10 m kitne bache hai");
+  ok(strength.body.source === "class_strength" && /Class 10 mein kul \d+ bachche/.test(strength.body.reply), "“class 10 m kitne bache hai” counts the class", strength.body);
+  const sectionStrength = await ask(principal, "10 A ki strength kya hai");
+  ok(sectionStrength.body.source === "class_strength" && /10 A mein \d+ bachche/.test(sectionStrength.body.reply), "one section's strength", sectionStrength.body);
+  const ranking = await ask(principal, "sabse kam attendance kis class ki hai?");
+  ok(ranking.body.source === "attendance_ranking", "class attendance ranking", ranking.body);
+  const tomorrow = await ask(principal, "kal kaunsa exam hai?");
+  ok(tomorrow.body.source === "exam_schedule" && /ko (koi exam nahi|exam:)/.test(tomorrow.body.reply), "“kal kaunsa exam hai” is about that one day", tomorrow.body);
+  const otherKid = await ask(parent, "Aakash Tiwari ki fees batao");
+  ok(!/Alice|₹/.test(otherKid.body.reply), "a parent asking about another child is not answered with their own child", otherKid.body);
+
+  console.log("ERP-wide reading (through the API, as the signed-in person)");
+  await call(principal, "DELETE", "/assistant/history");
+  const enquiries = await ask(principal, "admission enquiries dikhao");
+  ok(enquiries.body.source === "erp:/enquiries" && /Admission enquiries: kul \d+/.test(enquiries.body.reply), "principal reads admission enquiries", enquiries.body);
+  const visitors = await ask(principal, "aaj kitne visitors aaye");
+  ok(visitors.body.source === "erp:/visitors" && /Visitors \(aaj\)/.test(visitors.body.reply), "“aaj kitne visitors aaye” reads today's visitors (not attendance)", visitors.body);
+  const pendingPrs = await ask(principal, "pending purchase requests kitni hain");
+  ok(pendingPrs.body.source === "erp:/procurement/indents" && /pending/.test(pendingPrs.body.reply), "status words filter a list (pending purchase requests)", pendingPrs.body);
+  const hostel = await ask(principal, "hostel ka haal");
+  ok(hostel.body.source === "erp:/hostel" && !/\brecord\b/.test(hostel.body.reply), "rows with only a student id show the student's name", hostel.body);
+  const report = await ask(principal, "balance sheet dikhao");
+  ok(report.body.source === "erp:/accounts/ledger/reports" && !/nahi mil paya/.test(report.body.reply), "reports that need a period get this financial year", report.body);
+  const parentVendors = await ask(parent, "vendors ki list");
+  ok(/available nahi/.test(parentVendors.body.reply) && !/Gupta|Lab Mart/.test(parentVendors.body.reply), "a parent cannot read vendors through Jarvis", parentVendors.body);
+  const teacherPayroll = await ask(teacher, "payroll dikhao");
+  ok(/available nahi/.test(teacherPayroll.body.reply), "a teacher cannot read payroll through Jarvis", teacherPayroll.body);
+  const parentStaff = await ask(parent, "staff list dikhao");
+  // parents get the school's staff directory (names, designations — by design, as on the pages), never phone or salary
+  ok(!/\+91|\d{5}-\d{5}|₹/.test(parentStaff.body.reply), "a parent sees only the staff directory — no phone numbers or salaries", parentStaff.body);
+  const addStudent = await call(principal, "POST", "/assistant/chat", { messages: [{ role: "user", content: "naya student add karo" }], pagePath: "/principal", links: [{ href: "/principal/students", label: "Students" }] });
+  ok(addStudent.body.navigation?.href === "/principal/students" && !addStudent.body.action, "a change without a confirm step only offers the page", addStudent.body);
+  const issueBook = await ask(principal, "book issue kar do");
+  ok(!issueBook.body.source && !issueBook.body.action, "“book issue kar do” is never answered by reading a list", issueBook.body);
 
   console.log("Memory");
   for (const token of [principal, accountant]) await call(token, "DELETE", "/assistant/history");

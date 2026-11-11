@@ -10,6 +10,7 @@ import { authStore, can } from "@/store/auth";
 import { attendanceStore, recordVoiceAttendance } from "@/store/attendance";
 import { useClassRoster } from "@/store/students";
 import { useSubjects } from "@/store/timetable";
+import { rankedVoices, savedVoiceUri, saveVoiceUri, speak, voiceScore } from "./speech";
 
 /** The browser's own speech recognition (Chrome/Edge/Safari). Not in every TS DOM lib, so typed here. */
 interface BrowserRecognition {
@@ -308,18 +309,20 @@ export function VoiceAssistant() {
     if (!voiceReplies || !message || listening || thinking || !("speechSynthesis" in window)) return;
     if (lastSpokenRef.current === message) return;
     lastSpokenRef.current = message;
-    const speech = window.speechSynthesis;
-    speech.cancel();
-    const reply = new SpeechSynthesisUtterance(message);
-    reply.lang = "hi-IN";
-    reply.rate = 0.95;
-    const voices = speech.getVoices();
-    const voice = voices.find((candidate) => candidate.lang.toLowerCase() === "hi-in")
-      ?? voices.find((candidate) => candidate.lang.toLowerCase().startsWith("hi"))
-      ?? voices.find((candidate) => candidate.lang.toLowerCase() === "en-in");
-    if (voice) reply.voice = voice;
-    speech.speak(reply);
+    speak(message);
   }, [message, listening, thinking, voiceReplies]);
+
+  // the speaking voice: the most natural one by default, or the one picked in the panel
+  const [voiceOptions, setVoiceOptions] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceUri, setVoiceUri] = useState(savedVoiceUri);
+  useEffect(() => {
+    if (!("speechSynthesis" in window)) return;
+    // browsers load their voice list late (Chrome fires voiceschanged)
+    const load = () => setVoiceOptions(rankedVoices());
+    load();
+    window.speechSynthesis.addEventListener("voiceschanged", load);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", load);
+  }, []);
 
   useEffect(() => () => {
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -534,18 +537,10 @@ export function VoiceAssistant() {
       return;
     }
     // say "Haan, boliye" first and only then open the mic, so Jarvis does not hear itself
-    const speech = window.speechSynthesis;
-    speech.cancel();
-    const hello = new SpeechSynthesisUtterance("Haan, boliye");
-    hello.lang = "hi-IN";
-    const voice = speech.getVoices().find((candidate) => candidate.lang.toLowerCase().startsWith("hi"));
-    if (voice) hello.voice = voice;
     let started = false;
     const begin = () => { if (!started) { started = true; startCommand(); } };
-    hello.onend = begin;
-    hello.onerror = begin;
     window.setTimeout(begin, 2_500); // some phones never fire onend
-    speech.speak(hello);
+    speak("Haan, boliye", begin);
   };
 
   // the wake recogniser lives across renders; it calls the newest onWake through this ref
@@ -1090,6 +1085,35 @@ export function VoiceAssistant() {
                 )}
               </select>
             </label>
+            {voiceOptions.length > 0 && (
+              <div className="space-y-1 text-xs">
+                <label className="block space-y-1">
+                  <span className="font-medium">Jarvis ki awaaz</span>
+                  <select
+                    aria-label="Jarvis voice"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    value={voiceUri}
+                    onChange={(event) => {
+                      setVoiceUri(event.target.value);
+                      saveVoiceUri(event.target.value);
+                      speak("Namaste, main Jarvis hoon. Aaj aapki kya madad karun?");
+                    }}
+                  >
+                    <option value="">Sabse natural (apne aap) — {voiceOptions[0]?.name}</option>
+                    {voiceOptions.map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name} ({voice.lang}){voiceScore(voice) >= 60 ? " ★" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {voiceScore(voiceOptions[0]) < 60 && (
+                  <p className="text-muted-foreground">
+                    Is browser mein natural Hindi awaaz nahi mili. Microsoft Edge mein “Swara (Natural)” aur Chrome mein “Google हिन्दी” sabse acchi lagti hai.
+                  </p>
+                )}
+              </div>
+            )}
             {listening && engine === "browser" && (
               <p aria-live="polite" className="min-h-10 rounded-lg border border-dashed border-primary/50 bg-primary/5 p-3 text-sm">
                 {liveTranscript || <span className="text-muted-foreground">Sun raha hoon…</span>}

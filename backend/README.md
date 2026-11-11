@@ -174,6 +174,14 @@ Use a dedicated SQL login for the API rather than `sa`, with access to `school_e
    `POST /announcements`, `POST /fees/payments` with an Idempotency-Key) after the person confirms. The AI
    model is never allowed to pick an action. “yaad rakho …” / “bhool jao” / “kya yaad hai?” use
    `AssistantNote` (migration 027, kept until forgotten; `myClass` defaults to the class-teacher section).
+   **Anything else in the ERP** (`erp-read.ts`): a question naming an ERP list — visitors, admission
+   enquiries, purchase requests, vendors, GRNs, bills, expenses, bank, budgets, payroll, hostel, transport,
+   jobs, interviews, trainings, alumni, audit log, users, roles… (60+ lists) — is answered by calling that
+   list's own GET endpoint *with the person's token and branch*, so the API's permissions and row-level
+   security decide what comes back. Jarvis never queries or writes the database directly. The reply counts
+   and names the rows, filtered by a status word (“pending”) or “aaj”. A request to change something Jarvis
+   has no confirm step for (“naya student add karo”, “book issue kar do”) only offers to open the page where
+   it is done.
 2. **Local AI model** (Ollama) for anything else: answers about the visible page, opens a page from the
    visible menu (checked against the links sent), or picks a data tool.
 3. Replies are saved to `AssistantMessage` (migration 026) — the person's memory, read back on each question,

@@ -206,6 +206,16 @@ A floating assistant in every signed-in portal. Ask by typing, by the mic button
   upcoming holidays; notices (“fees wala notice”); one's own salary slip; school contact details; low stock;
   overdue library books; a school summary. These answers are written straight from the database — the AI
   model never makes up a number. A parent only ever gets their own child's data.
+- **The whole ERP, safely:** any list the ERP shows — visitors, admission enquiries, purchase requests,
+  vendors, bills, expenses, bank and accounts reports, payroll, hostel, transport, jobs, trainings, audit
+  log… — read through the ERP's own endpoints as the signed-in person, so nobody sees more through Jarvis
+  than on the pages, and every read is in the audit log. Class strength (“class 10 mein kitne bachche”),
+  class attendance ranking and failing students too. For a change without a confirm step (“naya student
+  add karo”) Jarvis opens the right page instead of doing it.
+- **Natural talk and voice:** greetings, thanks and “tum kya kar sakte ho” answered at once; names matched
+  against the school's real names (with small hearing slips); “fees aur attendance dono”, “… ke baare mein
+  batao”; the most natural voice the browser has (Edge “Swara Natural”, Chrome “Google हिन्दी”), chosen in
+  the panel, with ₹ amounts and dates read out properly.
 - **Good-morning briefing** for each role: the principal hears attendance pending per class, staff on leave,
   pending leave requests, fees overdue and low stock; a teacher their periods today and their class's
   attendance; a parent their child's attendance, next fee, homework and next exam.
@@ -312,7 +322,7 @@ work without it; only open-ended questions about a page need the model.
 
 **Tests:** `cd backend` and run `npm run test:db`, `test:academics`, `test:finance`, `test:communication`,
 `test:website`, `test:facilities`, `test:procurement`, `test:ledger`, `test:hrms`, `test:group`,
-`test:assistant` — 473 checks over HTTP as each role. Each suite removes what it created, including the
+`test:assistant` — 500 checks over HTTP as each role. Each suite removes what it created, including the
 automatic ledger entries; `npm run ledger:orphans` reports ledger entries whose payment / expense / payroll
 no longer exists (left by older test runs) and `-- --delete` removes them.
 
