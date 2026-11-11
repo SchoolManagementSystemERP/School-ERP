@@ -1,6 +1,6 @@
 -- Jarvis remembers each user's conversation (questions and replies), so it survives a refresh,
 -- logout or another device. Only the signed-in user's own messages are read back; the API deletes
--- them after ASSISTANT_MEMORY_MINUTES (1 hour by default), keeps at most 500 per user, and the user
+-- them after ASSISTANT_MEMORY_MINUTES (10 minutes by default), keeps at most 500 per user, and the user
 -- can clear them.
 SET XACT_ABORT ON;
 BEGIN TRY

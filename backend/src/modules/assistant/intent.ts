@@ -60,6 +60,8 @@ export function nameIn(text: string): string {
 /** The tool for a question, or null when it is not a data question we recognise. */
 export function detectIntent(question: string, allowed: string[]): Intent | null {
   const q = normalize(question);
+  // "marks page kholo" asks to open a page, not for someone's marks — leave it to page navigation
+  if (/\b(page|screen|section|tab|menu)\b/.test(q) || /\b(kholo|khol|kholiye|open|navigate|go to|jao|le chalo)\b/.test(q)) return null;
   const has = (key: keyof typeof KEYWORDS) => KEYWORDS[key].test(q);
   const name = nameIn(question);
   const className = classIn(question);

@@ -17,7 +17,7 @@ const MODEL_HISTORY = 10;
 
 type Reply = { reply: string; navigation: unknown; model: string; source: string | null };
 
-/** Messages older than this are forgotten (ASSISTANT_MEMORY_MINUTES, 60 by default). */
+/** Messages older than this are forgotten (ASSISTANT_MEMORY_MINUTES, 10 by default). */
 const memoryCutoff = () => new Date(Date.now() - env.ASSISTANT_MEMORY_MINUTES * 60_000);
 
 /** Deletes every organization's expired assistant messages. Run on a timer from server.ts. */
@@ -244,7 +244,7 @@ assistantRouter.post('/assistant/chat', chatLimiter, async (req, res) => {
   await answerFromData(decision.tool, decision.args);
 });
 
-/** GET /assistant/history — the signed-in user's saved conversation (last hour; latest 60 messages, oldest first). */
+/** GET /assistant/history — the signed-in user's saved conversation (within the memory time; latest 60 messages, oldest first). */
 assistantRouter.get('/assistant/history', async (req, res) => {
   const ctx = ctxOf(req);
   const { rows, total } = await withTenant(ctx.organizationId, async (tx) => {

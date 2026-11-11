@@ -21,7 +21,7 @@ const schema = z.object({
   /** How much of the visible page text goes to the model — the prompt size is what makes CPU replies slow. */
   ASSISTANT_PAGE_CHARS: z.coerce.number().int().min(500).max(14_000).default(3_500),
   /** Jarvis forgets a conversation this many minutes after it was said (deleted from the database). */
-  ASSISTANT_MEMORY_MINUTES: z.coerce.number().int().min(1).max(60 * 24 * 30).default(60),
+  ASSISTANT_MEMORY_MINUTES: z.coerce.number().int().min(1).max(60 * 24 * 30).default(10),
   /** Lets students / parents record "online" fee payments without a gateway — for demos only, never in production. */
   DEMO_PAYMENTS: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });

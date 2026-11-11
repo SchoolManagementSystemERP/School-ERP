@@ -333,7 +333,7 @@ export function VoiceAssistant() {
   // memory: the conversation saved on the server comes back after a refresh, logout or on another device
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
-  const [memoryMinutes, setMemoryMinutes] = useState(60);
+  const [memoryMinutes, setMemoryMinutes] = useState(10);
   useEffect(() => {
     if (!open || historyLoaded) return;
     setHistoryLoaded(true);

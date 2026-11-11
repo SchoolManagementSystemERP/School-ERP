@@ -111,8 +111,8 @@ async function cleanup() {
       await tx.journalEntry.deleteMany({ where: { id: { in: journalIds } } });
     }
     if (accountIds.length) await tx.ledgerAccount.deleteMany({ where: { id: { in: accountIds } } });
-    const auditIds = [...accountIds, ...journalIds];
-    if (auditIds.length) await tx.auditLog.deleteMany({ where: { entityId: { in: auditIds } } });
+    // AuditLog rows are immutable (migration 019) and stay as history. Deleting them used to throw and
+    // roll the whole cleanup back, leaving the test accounts and vouchers in the ledger.
   });
 }
 

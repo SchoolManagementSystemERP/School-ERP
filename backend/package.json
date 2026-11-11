@@ -27,7 +27,8 @@
     "seed:hr": "tsx scripts/seed-hr-demo.ts",
     "test:hrms": "tsx scripts/test-hrms.ts",
     "seed:group": "tsx scripts/seed-group-demo.ts",
-    "test:group": "tsx scripts/test-group.ts"
+    "test:group": "tsx scripts/test-group.ts",
+    "test:assistant": "tsx scripts/test-assistant.ts"
   },
   "dependencies": {
     "@prisma/adapter-mssql": "7.10.1",
