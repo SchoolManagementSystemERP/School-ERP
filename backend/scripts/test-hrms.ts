@@ -247,6 +247,11 @@ async function cleanup() {
     await tx.trainingQuestion.deleteMany({ where: { trainingId: { in: created.trainingIds } } });
     await tx.training.deleteMany({ where: { id: { in: created.trainingIds } } });
     await tx.separation.deleteMany({ where: { OR: [{ staffId: { in: created.staffIds } }, { reason: { startsWith: TAG } }] } });
+    // the automatic ledger entries for the test payroll run and expenses go with them
+    const sources = [...created.expenseIds, ...(created.payrollRunId ? [created.payrollRunId] : [])];
+    const sourceJournals = sources.length ? await tx.journalEntry.findMany({ where: { sourceId: { in: sources } }, select: { id: true } }) : [];
+    await tx.journalLine.deleteMany({ where: { journalEntryId: { in: sourceJournals.map((entry) => entry.id) } } });
+    await tx.journalEntry.deleteMany({ where: { id: { in: sourceJournals.map((entry) => entry.id) } } });
     await tx.expense.deleteMany({ where: { id: { in: created.expenseIds } } });
     for (const a of created.attendance) await tx.staffAttendance.deleteMany({ where: { staffId: a.staffId, date: new Date(`${a.date}T00:00:00Z`) } });
     await tx.expenseClaim.deleteMany({ where: { id: { in: created.claimIds } } });

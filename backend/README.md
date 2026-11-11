@@ -161,16 +161,24 @@ Use a dedicated SQL login for the API rather than `sa`, with access to `school_e
 
 `POST /assistant/chat` answers in three ways, cheapest first:
 1. **Data conversation, no AI model** (`intent.ts` → `tools.ts`): common questions (a student's fees,
-   attendance, marks, contacts; a class's absentees; fee defaulters; staff; leave; low stock; overdue books;
-   school summary) are recognised by keywords, run as read-only tools and answered word for word from the
-   data. Each tool checks the caller's permissions like the matching ERP page (staff by branch permission,
-   students / parents only their own children). When the class or person is missing Jarvis asks back
-   (`expectsReply: true`) and remembers the open question as `ask:<topic>`, so the next reply finishes it;
-   the last topic and person carry over to follow-ups (“aur 10 B ki?”, “uske marks?”); “chhodo” cancels.
+   attendance, marks, contacts, bus; a class's absentees; fee defaulters; staff; leave; timetable; homework;
+   exam date sheet; holidays; notices; own salary slip; school contacts; low stock; overdue books; school
+   summary; the good-morning briefing) are recognised by keywords, run as read-only tools and answered word
+   for word from the data. Each tool checks the caller's permissions like the matching ERP page (staff by
+   branch permission, students / parents only their own children; `everyone` tools limit themselves).
+   When the class or person is missing Jarvis asks back (`expectsReply: true`) and remembers the open
+   question as `ask:<topic>`; when a name matches several people it remembers `pick:<tool>` so “10 B wali”
+   chooses; the last topic and person carry over (“aur 10 B ki?”, “uske marks?”); “chhodo” cancels.
+   **Actions** (`leave_decision`, `send_notice`, `collect_fee`) only prepare a request — `{ method, path,
+   body, summary }` in the reply's `action` — which the panel sends to the normal endpoint (`PATCH /leaves/:id`,
+   `POST /announcements`, `POST /fees/payments` with an Idempotency-Key) after the person confirms. The AI
+   model is never allowed to pick an action. “yaad rakho …” / “bhool jao” / “kya yaad hai?” use
+   `AssistantNote` (migration 027, kept until forgotten; `myClass` defaults to the class-teacher section).
 2. **Local AI model** (Ollama) for anything else: answers about the visible page, opens a page from the
    visible menu (checked against the links sent), or picks a data tool.
 3. Replies are saved to `AssistantMessage` (migration 026) — the person's memory, read back on each question,
    deleted after `ASSISTANT_MEMORY_MINUTES` (default 10; swept every minute) and capped at 500 per person.
+   Chat is rate-limited to 60 questions a minute per signed-in person (not per address — a school shares one).
    `GET /assistant/history`, `DELETE /assistant/history` (clear), `GET /assistant/status` (model check).
 
 The model is self-hosted; nothing goes to OpenAI, Gemini or another hosted AI API. Install Ollama on the

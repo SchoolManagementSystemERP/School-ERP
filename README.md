@@ -200,11 +200,22 @@ printable documents (receipts, admit cards, payslips, offer letters, POs, GRNs, 
 ### 4.16 Jarvis — voice and chat assistant
 A floating assistant in every signed-in portal. Ask by typing, by the mic button, or hands-free with
 **“Hey Jarvis”**, in Hinglish, Hindi or English; it answers aloud too.
-- **Answers from ERP data**, read-only and limited to what the person's role may see: a student's fees,
-  attendance, marks and parents' contact; who is absent in a class; fee defaulters (whole school or one
-  class); staff details; who is on leave; low stock; overdue library books; a school summary. These answers
-  are written straight from the database — the AI model never makes up a number. A parent only ever gets
-  their own child's data; a teacher without fee access is told so.
+- **Answers from ERP data**, limited to what the person's role may see: a student's fees, attendance, marks,
+  parents' contact and school bus; who is absent in a class; fee defaulters; staff details and leave; a
+  class's or the teacher's own timetable (today, kal, any weekday); homework due; the exam date sheet;
+  upcoming holidays; notices (“fees wala notice”); one's own salary slip; school contact details; low stock;
+  overdue library books; a school summary. These answers are written straight from the database — the AI
+  model never makes up a number. A parent only ever gets their own child's data.
+- **Good-morning briefing** for each role: the principal hears attendance pending per class, staff on leave,
+  pending leave requests, fees overdue and low stock; a teacher their periods today and their class's
+  attendance; a parent their child's attendance, next fee, homework and next exam.
+- **Does work, after a confirm:** “Priya Sharma ki leave approve karo”, “Class 10 A ke parents ko notice
+  bhejo ki …”, “Aakash Tiwari ki fees UPI se jama karo”. Jarvis shows what will happen; only “Haan” (tap, or
+  say it in “Hey Jarvis” mode) runs it — through the same ERP endpoints, permissions and audit log as the
+  pages. Jarvis itself never writes to the database.
+- **Remembers you:** “yaad rakho meri class 10 B hai” — then “meri class ki attendance” works; a class teacher's
+  own class is known without asking. “kya yaad hai?”, “bhool jao”. When a name matches several students
+  (“Sharma ki fees”) it lists them and “10 B wali” picks one.
 - **Conversation:** it asks back when something is missing (“Kaunsi class?”, “Kis student ki?”), finishes
   the question with the next reply (“class 10 A ki dikhao”), keeps the topic (“aur 10 B ki?”, “aur uske
   marks?”) and drops it on “chhodo”. In “Hey Jarvis” mode it listens for the answer by itself.
@@ -225,7 +236,7 @@ Microsoft SQL Server, modelled in `backend/prisma/schema.prisma` (92 tables). Th
 | Group | Tables (examples) |
 |---|---|
 | Organization | Organization, Region, Branch, AcademicYear, Plan, Subscription |
-| People and access | User, Role, Permission, Membership, RefreshToken, AuditLog, AssistantMessage (Jarvis memory) |
+| People and access | User, Role, Permission, Membership, RefreshToken, AuditLog, AssistantMessage and AssistantNote (Jarvis memory) |
 | Students | Student, Guardian, Enrollment |
 | Academics | Grade, Section, Subject, TimetablePeriod, AttendanceSession, AttendanceEntry, Exam, ExamPaper, Mark, Assignment, StudyNote, Holiday |
 | Fees and finance | FeePlan, FeeInstallment, FeeConcession, FeePayment, Expense |
@@ -236,7 +247,7 @@ Microsoft SQL Server, modelled in `backend/prisma/schema.prisma` (92 tables). Th
 
 Ids are GUIDs; money is DECIMAL(12,2) in rupees. Foreign keys, check constraints and indexes are in
 `backend/database/constraints.sql`; changes to existing databases are versioned migrations
-(`backend/database/migrations/002–026`).
+(`backend/database/migrations/002–027`).
 
 ---
 
@@ -301,7 +312,9 @@ work without it; only open-ended questions about a page need the model.
 
 **Tests:** `cd backend` and run `npm run test:db`, `test:academics`, `test:finance`, `test:communication`,
 `test:website`, `test:facilities`, `test:procurement`, `test:ledger`, `test:hrms`, `test:group`,
-`test:assistant` — 443 checks over HTTP as each role.
+`test:assistant` — 473 checks over HTTP as each role. Each suite removes what it created, including the
+automatic ledger entries; `npm run ledger:orphans` reports ledger entries whose payment / expense / payroll
+no longer exists (left by older test runs) and `-- --delete` removes them.
 
 ---
 

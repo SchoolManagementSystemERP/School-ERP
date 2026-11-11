@@ -36,6 +36,15 @@ jarvis jarvish jervis hey hello hi namaste mujhe muje mujko humko hume dekhna de
 chahiye chaiye karo kar karna kariye do de dena dijiye bhai yaar sir maam bas wala wali ok okay accha theek thik haan han ha
 abhi zara sa vala vali pata malum maloom maaloom kuch koi samjha samajh samjhe hmm umm
 the of for what is how much tell me show give a an and or in on with please
+timetable time table schedule period periods routine somvar mangalvar budhvar guruvar shukravar shanivar ravivar parso
+monday tuesday wednesday thursday friday saturday sunday homework home work assignment assignments grihkarya
+date sheet datesheet paper papers upcoming agla agli agle next aane hone wala shuru
+bus van transport route stop pickup driver gaadi holiday holidays vacation band notice notices suchna circular announcement
+message salary payslip slip tankhwah vetan address email timing timings
+cash nakad upi cheque check card online collect receive record lo le lijiye payment
+approve approved reject rejected manjoor manzoor sweekar accept naamanjoor namanjoor asweekar mana request application arzi
+good morning suprabhat briefing update kaunsi kaunsa konse kaun-si time samay
+bacchon bachchon baccho bachcho bacchon vidyarthiyon studenton logon
 `.split(/\s+/).filter(Boolean));
 
 export type Intent = { tool: string; args: Record<string, unknown> };
@@ -60,15 +69,84 @@ export function nameIn(text: string): string {
   return t.split(' ').filter((w) => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w)).slice(0, 3).join(' ');
 }
 
+const WEEKDAYS: [RegExp, number][] = [
+  [/\b(monday|somvar|somwar)\b/, 1], [/\b(tuesday|mangalvar|mangalwar)\b/, 2], [/\b(wednesday|budhvar|budhwar)\b/, 3],
+  [/\b(thursday|guruvar|guruwar|brihaspativar)\b/, 4], [/\b(friday|shukravar|shukrawar)\b/, 5], [/\b(saturday|shanivar|shaniwar)\b/, 6],
+  [/\b(sunday|ravivar|raviwar|itwar)\b/, 7],
+];
+
+/** "kal", "parso", "monday" → YYYY-MM-DD (today when no day is named). For a timetable "kal" means tomorrow. */
+export function dateIn(text: string): string {
+  const q = normalize(text);
+  const now = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  let offset = 0;
+  if (/\bparso\b/.test(q)) offset = 2;
+  else if (/\b(kal|tomorrow)\b/.test(q)) offset = 1;
+  else {
+    const weekday = WEEKDAYS.find(([pattern]) => pattern.test(q))?.[1];
+    if (weekday) {
+      const current = now.getUTCDay() === 0 ? 7 : now.getUTCDay();
+      offset = (weekday - current + 7) % 7;
+    }
+  }
+  return new Date(now.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
+}
+
+const NOTICE_STOP = new Set('notice notices suchna circular announcement announcements wala wali wale dikhao dikhaiye batao bataiye kya hai hain koi aaj kal haal latest naya naye nayi recent sab sabhi mujhe jarvis padho sunao board aaya aayi aaye'.split(' '));
+const NOTICE_WORD =/\b(notice|suchna|circular|announcement|message|सूचना)\b/u;
+const SEND_WORD = /\b(bhejo|bhej do|bhejna|bhej dijiye|send|post karo|post kar do|laga do|lagao|daal do)\b/u;
+
+/** "class 10 A ke parents ko notice bhejo ki kal school band rahega" → who and what. */
+export function noticeParts(question: string) {
+  const match = question.match(/(?:notice|suchna|circular|announcement|message|सूचना)[^:]*?(?:\s(?:ki|that|likho|likh do|ke liye ki)\s+|:\s*)(.+)$/iu);
+  const message = match?.[1]?.trim() ?? '';
+  const head = normalize(message ? question.slice(0, question.length - message.length) : question);
+  const audience = /\b(parents?|abhibhavak|guardians?)\b/.test(head) ? 'PARENTS'
+    : /\b(students?|bachchon|bacchon|bachcho|baccho|vidyarthi)\b/.test(head) ? 'STUDENTS'
+      : /\b(staff|teachers?|shikshak|karmchari)\b/.test(head) ? 'STAFF' : 'EVERYONE';
+  return { message, audience, className: classIn(head) };
+}
+
+function paymentMethod(q: string) {
+  if (/\bupi|gpay|phonepe|paytm\b/.test(q)) return 'UPI';
+  if (/\b(cheque|check)\b/.test(q)) return 'CHEQUE';
+  if (/\bcard\b/.test(q)) return 'CARD';
+  return 'CASH';
+}
+
 /** The tool for a question, or null when it is not a data question we recognise. */
 export function detectIntent(question: string, allowed: string[]): Intent | null {
   const q = normalize(question);
+  const has = (key: keyof typeof KEYWORDS) => KEYWORDS[key].test(q);
+  const pick = (tool: string, args: Record<string, unknown> = {}): Intent => ({ tool, args });
+
+  // actions (prepared, then confirmed by the person) — the notice text may contain any word, so first
+  if (NOTICE_WORD.test(q) && SEND_WORD.test(q)) return pick('send_notice', noticeParts(question));
+  if (has('leave') && /\b(approve|manjoor|manzoor|sweekar|accept|reject|naamanjoor|namanjoor|asweekar|mana kar)\b/.test(q)) {
+    return pick('leave_decision', { name: nameIn(question), decision: /\b(reject|naamanjoor|namanjoor|asweekar|mana kar)\b/.test(q) ? 'REJECTED' : 'APPROVED' });
+  }
+  if (has('fees') && /\b(jama karo|jama kar do|jama kar lo|jama kijiye|collect karo|collect kar lo|receive karo|record karo|le lo|payment lo|pay karo)\b/.test(q)) {
+    return pick('collect_fee', { name: nameIn(question), method: paymentMethod(q) });
+  }
+
   // "marks page kholo" asks to open a page, not for someone's marks — leave it to page navigation
   if (/\b(page|screen|section|tab|menu)\b/.test(q) || /\b(kholo|khol|kholiye|open|navigate|go to|jao|le chalo)\b/.test(q)) return null;
-  const has = (key: keyof typeof KEYWORDS) => KEYWORDS[key].test(q);
   const name = nameIn(question);
   const className = classIn(question);
-  const pick = (tool: string, args: Record<string, unknown> = {}): Intent => ({ tool, args });
+
+  if (/\b(good morning|suprabhat|briefing|aaj ka (summary|update|haal|report|plan)|din ka summary|aaj kya (hai|chal raha))\b/.test(q)) return pick('daily_briefing');
+  if (/\b(timetable|time table|schedule|routine|period|periods)\b/.test(q) && !/\b(exam|pariksha|date ?sheet)\b/.test(q)) return pick('timetable', { className, date: dateIn(question) });
+  if (/\b(homework|home work|assignments?|grih ?karya)\b/.test(q)) return pick('homework', { className });
+  if (/\b(date ?sheet|exam|exams|pariksha|paper)\b/.test(q) && /\b(kab|date|schedule|upcoming|aane wal\w*|agl\w|next|shuru|hone wal\w*|sheet)\b/.test(q)) return pick('exam_schedule', { className });
+  if (/\b(bus|van|transport|route|pickup|driver|gaadi)\b/.test(q)) return pick('transport', { name });
+  if (/\b(holidays?|vacation|chhuttiyan|chuttiyan|school band|agli (chhutti|chutti)|next holiday|chhutti kab|chutti kab)\b/.test(q) && !/\b(kaun|staff|teacher|leave|pe hai|par hai)\b/.test(q)) return pick('holidays');
+  if (/\b(salary|payslip|pay slip|tankhwah|vetan)\b/.test(q)) return pick('my_payslip');
+  if (NOTICE_WORD.test(q) || /\bnotices\b/.test(q)) {
+    // "fees wala notice" — keep topic words like "fees", drop only the asking words
+    const query = q.split(' ').filter((w) => w.length > 2 && !NOTICE_STOP.has(w)).slice(0, 4).join(' ');
+    return pick('notices', { query });
+  }
+  if (/\b(school ka|school ki|school ke)\b/.test(q) && /\b(number|phone|address|email|timing|timings|time|contact|website)\b/.test(q)) return pick('school_info');
 
   if (has('library') && (has('libraryLate') || !name)) return pick('library_overdue');
   if (has('stock')) return pick('low_stock');
@@ -164,9 +242,90 @@ export function formatAnswer(tool: string, data: unknown): string | null {
       if (!o.length) return 'Koi book overdue nahi hai.';
       return `${o.length}${o.length >= 15 ? '+' : ''} books late hain: ${o.slice(0, 6).map((l) => `“${l.book}” — ${l.borrower} (${l.daysLate} din late)`).join(', ')}.`;
     }
+    case 'timetable': {
+      if (d.mine) {
+        const periods: Any[] = d.periods ?? [];
+        return periods.length
+          ? `Aapka ${d.day} (${d.date}) ka timetable: ${periods.map((p) => `P${p.period} ${p.time} ${p.class} ${p.subject}`).join('; ')}.`
+          : `${d.day} (${d.date}) ko aapka koi period nahi hai.`;
+      }
+      return (d.classes as Any[]).map((c) => (c.periods as Any[]).length
+        ? `${c.class} — ${d.day}: ${(c.periods as Any[]).map((p) => `P${p.period} ${p.time} ${p.subject}${p.teacher ? ` (${p.teacher})` : ''}`).join('; ')}.`
+        : `${c.class}: ${d.day} ko koi period nahi hai.`).join(' ') || 'Class batayein, jaise “10 A ka timetable”.';
+    }
+    case 'homework': {
+      const h: Any[] = d.homework ?? [];
+      if (!h.length) return 'Agle 7 din mein koi homework due nahi hai.';
+      return `Agle 7 din ka homework: ${h.slice(0, 8).map((x) => `${x.class} ${x.subject} — “${x.title}”, ${x.due} tak`).join('; ')}.`;
+    }
+    case 'exam_schedule': {
+      const p: Any[] = d.papers ?? [];
+      if (!p.length) return `${d.for === 'all classes' ? '' : `${d.for}: `}abhi koi aane wala exam nahi hai.`;
+      return `Aane wale exams (${d.for}): ${p.slice(0, 8).map((x) => `${x.date} ${x.subject} (${x.exam}, ${x.time}${x.classes ? `, ${x.classes}` : ''})`).join('; ')}.`;
+    }
+    case 'transport':
+      if (typeof d.transport === 'string') return `${d.student}: ${d.transport}.`;
+      return `${d.student} (${d.class ?? '-'}): route ${d.route ?? '-'}, stop ${d.stop ?? '-'}, pickup ${d.pickupTime ?? '-'}${d.vehicle ? `, gaadi ${d.vehicle}` : ''}${d.driver ? `, driver ${d.driver}` : ''}.`;
+    case 'holidays': {
+      const h: Any[] = d.holidays ?? [];
+      if (!h.length) return 'Agle 90 din mein koi chhutti calendar mein nahi hai.';
+      return `Aane wali chhuttiyan: ${h.slice(0, 6).map((x) => `${x.name} (${x.from === x.to ? x.from : `${x.from} se ${x.to}`})`).join('; ')}.`;
+    }
+    case 'notices': {
+      const n: Any[] = d.notices ?? [];
+      if (!n.length) return d.query ? `“${d.query}” se juda koi notice nahi mila.` : 'Notice board par koi notice nahi hai.';
+      return `${d.query ? `“${d.query}” wale notices` : 'Haal ke notices'}: ${n.slice(0, 3).map((x) => `${x.date} — ${x.title}: ${x.text}`).join(' | ')}`;
+    }
+    case 'my_payslip':
+      return `Aapki ${d.month} ki salary: gross ${inr(d.gross)}, katauti ${inr(d.deductions)}, haath mein ${inr(d.net)} (${d.status === 'PAID' ? `${d.paidOn ?? ''} ko paid` : 'abhi pay nahi hui'}).`;
+    case 'school_info': {
+      const extra = Object.entries(d).filter(([k]) => !['school', 'phone', 'email'].includes(k)).slice(0, 5).map(([k, v]) => `${k}: ${v}`);
+      return `${d.school} — phone ${d.phone}, email ${d.email}${extra.length ? `; ${extra.join('; ')}` : ''}.`;
+    }
+    case 'daily_briefing':
+      return briefingText(d);
+    case 'leave_decision':
+    case 'send_notice':
+    case 'collect_fee':
+      return d.action ? `${d.action.title} ${d.action.summary}` : null;
     default:
       return null;
   }
+}
+
+function briefingText(d: Any): string {
+  const first = String(d.name ?? '').replace(/^(Dr|Mr|Mrs|Ms|Shri)\.?\s+/, '').split(/\s+/)[0];
+  const hello = `Good morning${first ? ` ${first}` : ''}!`;
+  const holiday = d.nextHoliday ? ` Agli chhutti: ${d.nextHoliday.name} (${d.nextHoliday.from}).` : '';
+  if (d.kind === 'office') {
+    const s = d.summary ?? {};
+    const att = typeof s.todayAttendance === 'string' ? 'Aaj ki student attendance abhi shuru nahi hui.' : `Aaj ${s.todayAttendance.percent}% students present.`;
+    const missing = d.attendanceMissing?.length ? ` ${d.attendanceMissing.length}/${d.totalClasses} classes ki attendance baaki: ${list(d.attendanceMissing, 5)}.` : ' Sab classes ki attendance ho gayi.';
+    const leaves = d.leaves ? ` ${d.leaves.onLeaveToday.length} staff aaj chhutti par${d.leaves.pendingRequests.length ? `, ${d.leaves.pendingRequests.length} leave request pending` : ''}.` : '';
+    const fees = s.fees ? ` Fees overdue: ${inr(s.fees.overdue)} (collection ${s.fees.collectionPercent ?? 0}%).` : '';
+    const stock = d.lowStock ? ` ${d.lowStock} store items minimum se kam.` : '';
+    return `${hello} ${att}${missing}${leaves}${fees}${stock}${holiday}`;
+  }
+  if (d.kind === 'teacher') {
+    const tt = d.timetable?.periods ?? [];
+    const periods = tt.length ? `Aaj aapke ${tt.length} period: ${tt.map((p: Any) => `${p.time} ${p.class} ${p.subject}`).join('; ')}.` : 'Aaj aapka koi period nahi hai.';
+    const mine = d.myClassAttendance
+      ? d.myClassAttendance.taken ? ` ${d.myClassAttendance.class}: ${d.myClassAttendance.present} present, ${d.myClassAttendance.absent} absent.` : ` ${d.myClassAttendance.class} ki attendance abhi leni hai.`
+      : '';
+    const hw = d.homework?.length ? ` ${d.homework.length} homework is hafte due.` : '';
+    return `${hello} ${periods}${mine}${hw}${holiday}`;
+  }
+  if (d.kind === 'family') {
+    const kids = (d.children as Any[]).map((c) => {
+      const att = c.todayAttendance ? `aaj ${String(c.todayAttendance).toLowerCase()}` : 'aaj ki attendance abhi nahi lagi';
+      const fee = c.overdue > 0 ? `, ${inr(c.overdue)} fees overdue` : c.nextInstallment ? `, agli fees ${inr(c.nextInstallment.amount)} ${c.nextInstallment.dueDate} tak` : '';
+      return `${c.name} (${c.class ?? '-'}): ${att}${fee}.`;
+    }).join(' ');
+    const hw = d.homework?.length ? ` Homework: ${d.homework.slice(0, 3).map((h: Any) => `${h.subject} — ${h.title} (${h.due})`).join('; ')}.` : '';
+    const exam = d.nextExam ? ` Agla exam: ${d.nextExam.subject} ${d.nextExam.date}.` : '';
+    return `${hello} ${kids}${hw}${exam}${holiday}`;
+  }
+  return `${hello}${holiday}`;
 }
 
 // ── conversation: asking back, remembering the open question and the topic ──────
@@ -237,7 +396,13 @@ export type Turn =
   | { kind: 'run'; tool: string; args: Record<string, unknown> }
   | { kind: 'ask'; text: string; topic: Topic }
   | { kind: 'cancel'; text: string }
+  | { kind: 'remember'; key: string; value: string; text: string }
+  | { kind: 'forget'; text: string }
+  | { kind: 'recall' }
   | null;
+
+/** Saved with a reply that matched several people ("pick:student_fees|CASH"), so "10 B wali" can choose. */
+export const PICK_PREFIX = 'pick:';
 
 /**
  * Decides what to do with a message, given what Jarvis said last:
@@ -245,20 +410,55 @@ export type Turn =
  *                question ("ask:fees"); lastName — the person talked about in the recent turns.
  * Returns null when it is not a data conversation (the AI model handles it).
  */
-export function planTurn(question: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string): Turn {
+export function planTurn(asked: string, allowed: string[], staffTools: string[], lastSource: string | null, lastName: string, myClass: string | null = null): Turn {
+  // "meri class" → the class the person told Jarvis to remember, or the one they are class teacher of
+  const question = myClass ? asked.replace(/\b(meri|mere|mera|hamari|hamare|apni|apne|my)\s+class\b/giu, `class ${myClass}`) : asked;
   const q = normalize(question);
+
+  // ── long-term memory: "yaad rakho …", "bhool jao", "kya yaad hai?" ──
+  const remember = question.match(/\b(?:yaad rakho|yad rakho|yaad rakhna|yaad kar lo|remember)\b\s*(?:ki|that)?\s*(.*)$/iu);
+  if (remember) {
+    const fact = remember[1].trim().replace(/[.!?]+$/, '');
+    const factClass = classIn(fact);
+    if (factClass && /\bclass\b/.test(normalize(fact)) && /\b(meri|mera|mere|my|hamari|apni)\b/.test(normalize(fact))) {
+      return { kind: 'remember', key: 'myClass', value: factClass, text: `Theek hai, yaad rakh liya: aapki class ${factClass} hai. Ab “meri class ki attendance” ya “meri class ka timetable” bol sakte hain.` };
+    }
+    if (fact.length < 3) return { kind: 'cancel', text: 'Kya yaad rakhna hai? Jaise “yaad rakho meri class 10 B hai”.' };
+    return { kind: 'remember', key: 'note', value: fact.slice(0, 480), text: `Theek hai, yaad rakh liya: “${fact}”.` };
+  }
+  if (/\b(bhool jao|bhul jao|bhula do|forget)\b/.test(q)) return { kind: 'forget', text: 'Theek hai, jo yaad rakhne ko kaha tha wo sab bhool gaya.' };
+  if (/\b(kya yaad hai|kya kya yaad|yaad kya hai|what do you remember)\b/.test(q)) return { kind: 'recall' };
+
   const pending = lastSource?.startsWith(ASK_PREFIX) ? (lastSource.slice(ASK_PREFIX.length) as Topic) : null;
+  const picking = lastSource?.startsWith(PICK_PREFIX) ? lastSource.slice(PICK_PREFIX.length) : null;
   const lastTopic = pending ?? (lastSource ? TOPIC_OF[lastSource] ?? null : null);
 
-  if (pending && CANCEL.test(q)) return { kind: 'cancel', text: 'Theek hai, chhod diya. Aur kuch poochhna ho to boliye.' };
+  if ((pending || picking) && CANCEL.test(q)) return { kind: 'cancel', text: 'Theek hai, chhod diya. Aur kuch poochhna ho to boliye.' };
+
+  // several people matched last time: "10 B wali" / "Riya Sharma" picks one
+  if (picking) {
+    const [tool, extra] = picking.split('|');
+    const pickedClass = classIn(question);
+    const pickedName = nameIn(question);
+    const fresh = detectIntent(question, allowed);
+    // a new question of another kind is not a pick
+    if (q.split(' ').length <= 6 && (pickedClass || pickedName) && (!fresh || fresh.tool === tool)) {
+      const args: Record<string, unknown> = { name: pickedName || lastName, ...(pickedClass ? { className: pickedClass } : {}) };
+      if (extra && tool === 'collect_fee') args.method = extra;
+      if (extra && tool === 'leave_decision') args.decision = extra;
+      return { kind: 'run', tool, args };
+    }
+  }
+
   // "marks page kholo" — opening a page, even in the middle of a conversation: the model handles it
-  if (/\b(page|screen|menu|kholo|khol|kholiye|open|navigate|le chalo)\b/.test(q)) return null;
+  if (!(NOTICE_WORD.test(q) && SEND_WORD.test(q)) && /\b(page|screen|menu|kholo|khol|kholiye|open|navigate|le chalo)\b/.test(q)) return null;
 
   const intent = detectIntent(question, allowed);
   if (intent) {
     // "uski attendance?" — the person from the recent conversation
     if ('name' in intent.args && !intent.args.name && PRONOUN.test(q) && lastName) intent.args.name = lastName;
     const missing = missingTopic(intent, staffTools);
+    if (missing === 'attendance' && myClass) return { kind: 'run', tool: 'class_attendance', args: { className: myClass } };
     if (missing) return { kind: 'ask', text: askText(missing, staffTools, false), topic: missing };
     return { kind: 'run', ...intent };
   }

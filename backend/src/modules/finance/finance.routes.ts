@@ -10,7 +10,7 @@ import { AppError, badRequest, conflict, forbidden, notFound } from '../../lib/e
 import { dateOnly, idParam, toDateString } from '../../lib/http.js';
 import { memberBranches, readScope } from '../../lib/scope.js';
 import { ctxOf } from '../../middleware/authenticate.js';
-import { expenseAccountForCategory, paymentLedgerLine, postJournal } from './ledger.js';
+import { expenseAccountForCategory, paymentLedgerLine, postJournal, removeSourceJournal } from './ledger.js';
 
 /**
  * Fees (multi-head structure, student accounts, payments) and expenses.
@@ -702,6 +702,8 @@ financeRouter.delete('/expenses/:id', async (req, res) => {
     if ((await tx.vendorPayment.count({ where: { expenseId: id } })) || (await tx.pettyCashVoucher.count({ where: { expenseId: id } }))) {
       throw badRequest('This expense was booked by a purchase payment or petty-cash voucher — it cannot be deleted here.');
     }
+    // the expense's automatic ledger entry goes with it — otherwise the books keep an expense that no longer exists
+    await removeSourceJournal(tx, ctx, { branchId: e.branchId, sourceType: 'EXPENSE', sourceId: id });
     await tx.expense.delete({ where: { id } });
     await audit(tx, ctx, { action: 'DELETE', entity: 'Expense', entityId: id, branchId: e.branchId, before: { ...e, amount: money(e.amount) } });
   });

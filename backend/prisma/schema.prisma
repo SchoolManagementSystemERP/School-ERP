@@ -1852,3 +1852,16 @@ model AssistantMessage {
 
   @@index([organizationId, userId, createdAt])
 }
+
+/// What a person asked Jarvis to remember ("meri class 10 B hai") — kept until "bhool jao".
+model AssistantNote {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  userId         String   @db.UniqueIdentifier
+  key            String   @db.NVarChar(40) // myClass | note:<n>
+  value          String   @db.NVarChar(500)
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  @@unique([userId, key])
+  @@index([organizationId, userId])
+}

@@ -19,10 +19,13 @@
 - [x] Group office: 14 more built-in head-office / cluster roles (director, secretary, treasurer, trustee, admissions, purchase, IT, compliance, auditor, inspection, transport, marketing, training, cluster head) and a Group portal with the Group Dashboard (schools side by side, region totals, targets flagged, CSV); demo: `npm run seed:group` makes `greenwood` a group of three schools in two regions.
 
 - [x] Jarvis assistant: fast browser speech + private on-device Whisper, “Hey Jarvis” hands-free, read-only answers from ERP data per role (fees, attendance, marks, contacts, absentees, defaulters, staff, leave, stock, library, summary), asks back for a missing class / student and keeps the topic, 10-minute server memory, `npm run test:assistant` (40 checks); `npm run dev:mobile` for phones (HTTPS).
+- [x] Jarvis, round 2: timetable, homework, exam date sheet, bus, holidays, notices, own salary slip, school contacts; good-morning briefing per role; confirmed actions (leave approve / reject, notice, counter fee payment) through the normal endpoints; “yaad rakho / bhool jao / kya yaad hai” (`AssistantNote`, migration 027); “10 B wali” picks among same-name students; per-person rate limit; 69 checks in `test:assistant`.
+- [x] Deleting an expense now also removes its automatic ledger entry; the finance, procurement and HR tests remove theirs too (`npm run ledger:orphans` finds old leftovers).
 
 ## Next
 
-- [ ] **Jarvis:** more data (timetable, homework, transport, hostel, salary slips for the person themself, exam schedule); actions with a confirm step (approve a leave, record a fee payment, send a notice); “yaad rakho …” long-term preferences (e.g. “meri class 10 B hai”); pick among students with the same name (“10 B wala”); faster model on a server with a GPU for open-ended questions.
+- [ ] **Ledger clean-up:** the demo database holds 64 automatic ledger entries from older test runs whose payment / refund / expense / payroll no longer exists — review with `npm run ledger:orphans`, remove with `-- --delete`.
+- [ ] **Jarvis next:** hostel questions; more actions (mark a staff attendance, send a message to one parent, raise a purchase request); answers from uploaded documents (fee rules, handbook); natural Hindi voice (Piper) and an offline wake word (openWakeWord); for open-ended questions, a model on a GPU server — or a cloud model if the school agrees to send that data out.
 
 - [ ] **Security:** change the `sa` password (it was shared in chat); keep a copy of `DATA_ENCRYPTION_KEY` somewhere safe (without it encrypted Aadhaar / PAN / bank details cannot be read); use a real TLS certificate instead of `trustServerCertificate=true` in production.
 - [ ] `npm audit` (backend) reports `@azure/msal-node` through `mssql` → `tedious` → `@azure/identity`; it is used only for Azure AD sign-in, which the API does not use. Update when `@azure/identity` ships a fixed version.

@@ -141,7 +141,10 @@ async function main() {
   ok(listed.some((e) => e.id === exp.body.id), "the principal sees expenses (reports)");
   const purchase = listed.find((e) => e.fromPurchase);
   if (purchase) ok((await call(accountant, "DELETE", `/expenses/${purchase.id}`)).status === 400, "expenses booked by purchase payments cannot be deleted");
+  const postedBefore = await withSystem((tx) => tx.journalEntry.count({ where: { sourceType: "EXPENSE", sourceId: exp.body.id } }));
   ok((await call(accountant, "DELETE", `/expenses/${exp.body.id}`)).status === 204, "the accountant deletes an expense");
+  const postedAfter = await withSystem((tx) => tx.journalEntry.count({ where: { sourceType: "EXPENSE", sourceId: exp.body.id } }));
+  ok(postedBefore === 1 && postedAfter === 0, "deleting an expense also removes its ledger entry", { postedBefore, postedAfter });
   created.expenses = [];
 
   console.log("Leave");
@@ -209,6 +212,13 @@ async function main() {
 
 async function cleanup() {
   await withSystem(async (tx) => {
+    // ledger entries posted for the test payments, refunds, expenses and payroll go first —
+    // otherwise they stay in the books with nothing behind them
+    const tagExpenses = await tx.expense.findMany({ where: { description: { startsWith: TAG } }, select: { id: true } });
+    const sources = [...created.payments, ...created.refunds, ...created.expenses, ...tagExpenses.map((e) => e.id), ...(created.payrollRun ? [created.payrollRun] : [])];
+    const sourceJournals = sources.length ? await tx.journalEntry.findMany({ where: { sourceId: { in: sources } }, select: { id: true } }) : [];
+    await tx.journalLine.deleteMany({ where: { journalEntryId: { in: sourceJournals.map((entry) => entry.id) } } });
+    await tx.journalEntry.deleteMany({ where: { id: { in: sourceJournals.map((entry) => entry.id) } } });
     const advanceEntries = await tx.journalEntry.findMany({
       where: { sourceType: "STAFF_ADVANCE", sourceId: { in: created.advances } },
       select: { id: true },

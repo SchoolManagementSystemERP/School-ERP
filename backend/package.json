@@ -28,7 +28,8 @@
     "test:hrms": "tsx scripts/test-hrms.ts",
     "seed:group": "tsx scripts/seed-group-demo.ts",
     "test:group": "tsx scripts/test-group.ts",
-    "test:assistant": "tsx scripts/test-assistant.ts"
+    "test:assistant": "tsx scripts/test-assistant.ts",
+    "ledger:orphans": "tsx scripts/ledger-orphans.ts"
   },
   "dependencies": {
     "@prisma/adapter-mssql": "7.10.1",

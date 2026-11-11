@@ -25,10 +25,13 @@ warning once) because phones only allow the microphone on HTTPS or localhost.
 
 ### Jarvis (`src/components/voice/`)
 
-The floating Jarvis button in every signed-in portal: type, press the mic, or turn on **“Hey Jarvis”** and
-speak hands-free. It answers questions from the ERP data (fees, attendance, marks, contacts, absentees,
-defaulters, staff, leave, stock, library), asks back when the class or student is missing and listens for
+The floating Jarvis button in every signed-in portal: type, press the mic, tap a quick chip (“Good morning —
+aaj ka briefing”, “Aaj ka timetable”…), or turn on **“Hey Jarvis”** and speak hands-free. It answers questions
+from the ERP data (fees, attendance, marks, contacts, bus, timetable, homework, exams, holidays, notices,
+salary slip, staff, leave, stock, library), asks back when the class or student is missing and listens for
 the answer by itself in hands-free mode, opens pages (“marks page kholo”), and reads replies aloud.
+For leave approval, notices and counter fee payments it shows an amber **confirm card**; the change happens
+only on “Haan” (button, or spoken in hands-free mode) and goes through the normal API endpoint.
 The conversation is remembered on the server for 10 minutes (“Memory clear karo” wipes it). How the answers
 are made and which settings exist: `backend/README.md` → Jarvis.
 

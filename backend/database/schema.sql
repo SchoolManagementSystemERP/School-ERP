@@ -1600,6 +1600,20 @@ CREATE TABLE [dbo].[AssistantMessage] (
 );
 CREATE NONCLUSTERED INDEX [AssistantMessage_organizationId_userId_createdAt_idx] ON [dbo].[AssistantMessage]([organizationId], [userId], [createdAt]);
 
+-- What a person asked Jarvis to remember (migration 027)
+CREATE TABLE [dbo].[AssistantNote] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [userId] UNIQUEIDENTIFIER NOT NULL,
+    [key] NVARCHAR(40) NOT NULL,
+    [value] NVARCHAR(500) NOT NULL,
+    [updatedAt] DATETIME2 NOT NULL CONSTRAINT [AssistantNote_updatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [AssistantNote_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [AssistantNote_userId_key_key] UNIQUE ([userId], [key]),
+    CONSTRAINT [FK_AssistantNote_userId] FOREIGN KEY ([userId]) REFERENCES [dbo].[User]([id])
+);
+CREATE NONCLUSTERED INDEX [AssistantNote_organizationId_userId_idx] ON [dbo].[AssistantNote]([organizationId], [userId]);
+
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [Subscription_organizationId_idx] ON [dbo].[Subscription]([organizationId]);
 

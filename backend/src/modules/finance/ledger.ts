@@ -110,6 +110,26 @@ export async function postJournal(
   return id;
 }
 
+/**
+ * Removes the automatic journal posted for a record that is being deleted (e.g. an expense entered by
+ * mistake), so the books do not keep an entry with nothing behind it. The removal is audit-logged.
+ */
+export async function removeSourceJournal(tx: Tx, ctx: RequestContext, input: { branchId: string; sourceType: string; sourceId: string }) {
+  const entries = await tx.journalEntry.findMany({
+    where: { branchId: input.branchId, sourceType: input.sourceType, sourceId: input.sourceId },
+    select: { id: true, entryNo: true, entryDate: true, description: true },
+  });
+  for (const entry of entries) {
+    await tx.journalLine.deleteMany({ where: { journalEntryId: entry.id } });
+    await tx.journalEntry.delete({ where: { id: entry.id } });
+    await audit(tx, ctx, {
+      action: 'DELETE', entity: 'JournalEntry', entityId: entry.id, branchId: input.branchId,
+      before: { entryNo: entry.entryNo, entryDate: entry.entryDate.toISOString().slice(0, 10), description: entry.description, sourceType: input.sourceType, sourceId: input.sourceId },
+    });
+  }
+  return entries.length;
+}
+
 export function cashAccountForMethod(method: string) {
   if (method === 'CASH') return '1000';
   if (method === 'CARD' || method === 'POS') return '1020';

@@ -8,7 +8,7 @@
 import "dotenv/config";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.js";
-import { prisma } from "../src/db/prisma.js";
+import { prisma, withSystem } from "../src/db/prisma.js";
 import { classIn, detectIntent, nameIn } from "../src/modules/assistant/intent.js";
 
 const ORG = "greenwood";
@@ -43,6 +43,25 @@ const ask = (token: string, content: string) =>
   call(token, "POST", "/assistant/chat", { messages: [{ role: "user", content }], pagePath: "/", links: [] });
 
 const tokens: string[] = [];
+const TAG = `JT${Date.now().toString(36)}`;
+const created = { leaves: [] as string[], notices: [] as string[], payments: [] as string[] };
+
+/** Removes what the action checks created (audit log rows stay — they are immutable). */
+async function cleanup() {
+  await withSystem(async (tx) => {
+    const journals = await tx.journalEntry.findMany({ where: { sourceType: "FEE_PAYMENT", sourceId: { in: created.payments } }, select: { id: true } });
+    await tx.journalLine.deleteMany({ where: { journalEntryId: { in: journals.map((j) => j.id) } } });
+    await tx.journalEntry.deleteMany({ where: { id: { in: journals.map((j) => j.id) } } });
+    await tx.feePayment.deleteMany({ where: { id: { in: created.payments } } });
+    await tx.announcementAudience.deleteMany({ where: { OR: [{ announcementId: { in: created.notices } }, { announcement: { body: { contains: TAG } } }] } });
+    await tx.announcement.deleteMany({ where: { OR: [{ id: { in: created.notices } }, { body: { contains: TAG } }] } });
+    await tx.leaveRequest.deleteMany({ where: { OR: [{ id: { in: created.leaves } }, { reason: { startsWith: TAG } }] } });
+    // what the test users told Jarvis to remember
+    const org = await tx.organization.findUnique({ where: { subdomain: ORG }, select: { id: true } });
+    const users = org ? await tx.user.findMany({ where: { organizationId: org.id, username: { in: ["principal", "T001", "9876511111", "accountant"] } }, select: { id: true } }) : [];
+    await tx.assistantNote.deleteMany({ where: { userId: { in: users.map((u) => u.id) } } });
+  });
+}
 
 async function main() {
   console.log("Understanding questions (no AI model)");
@@ -124,7 +143,83 @@ async function main() {
   for (const token of [principal, parent]) await call(token, "DELETE", "/assistant/history");
   await ask(principal, "Aakash Tiwari ki fees kitni baaki hai?");
 
+  console.log("Everyday information");
+  const timetable = await ask(principal, "Class 10 A ka aaj ka timetable batao");
+  ok(timetable.body.source === "timetable" && /10 A/.test(timetable.body.reply), "a class's timetable for today", timetable.body);
+  const myTimetable = await ask(teacher, "mera timetable kya hai?");
+  ok(myTimetable.body.source === "timetable" && /Aapka/.test(myTimetable.body.reply), "a teacher's own timetable", myTimetable.body);
+  const exams = await ask(parent, "exam kab hai?");
+  ok(exams.body.source === "exam_schedule" && /Aane wale exams|koi aane wala exam nahi/.test(exams.body.reply), "a parent gets the date sheet for their child's class", exams.body);
+  const bus = await ask(parent, "bus ka time kya hai?");
+  ok(bus.body.source === "transport" && /pickup|transport nahi/.test(bus.body.reply), "a parent gets their child's bus", bus.body);
+  const otherClass = await ask(parent, "10 B ka timetable");
+  ok(/nahi mili/.test(otherClass.body.reply), "a parent cannot read another class's timetable", otherClass.body);
+  const holidays = await ask(principal, "Agli chhutti kab hai?");
+  ok(holidays.body.source === "holidays", "upcoming holidays", holidays.body);
+  const feeNotice = await ask(principal, "Fees wala notice dikhao");
+  ok(feeNotice.body.source === "notices" && /fees/i.test(feeNotice.body.reply), "notices are searched by topic (“fees wala notice”)", feeNotice.body);
+  const slip = await ask(teacher, "meri salary slip");
+  ok(slip.body.source === "my_payslip" && /salary|slip/.test(slip.body.reply), "a staff member gets their own salary slip", slip.body);
+  const info = await ask(parent, "School ka phone number kya hai?");
+  ok(info.body.source === "school_info" && /phone/.test(info.body.reply), "school contact details", info.body);
+  const briefOffice = await ask(principal, "Good morning Jarvis");
+  ok(briefOffice.body.source === "daily_briefing" && /Good morning/.test(briefOffice.body.reply) && /Fees overdue/.test(briefOffice.body.reply), "principal's morning briefing", briefOffice.body);
+  const briefTeacher = await ask(teacher, "good morning");
+  ok(briefTeacher.body.source === "daily_briefing" && /period/.test(briefTeacher.body.reply), "teacher's morning briefing has their periods", briefTeacher.body);
+  const briefParent = await ask(parent, "good morning");
+  ok(briefParent.body.source === "daily_briefing" && !/Fees overdue: ₹/.test(briefParent.body.reply), "parent's briefing is about their own child only", briefParent.body);
+
+  console.log("Remembering and picking");
+  for (const token of [principal, teacher]) await call(token, "DELETE", "/assistant/history");
+  await ask(principal, "bhool jao");
+  const remembered = await ask(principal, "yaad rakho meri class 10 B hai");
+  ok(/10 B/.test(remembered.body.reply), "“yaad rakho meri class 10 B hai” is saved", remembered.body);
+  const myClassAtt = await ask(principal, "meri class ki attendance dikhao");
+  ok(myClassAtt.body.source === "class_attendance" && /10 B/.test(myClassAtt.body.reply), "“meri class” means the remembered class", myClassAtt.body);
+  const recall = await ask(principal, "kya yaad hai?");
+  ok(/10 B/.test(recall.body.reply), "“kya yaad hai?” lists it", recall.body);
+  await ask(principal, "bhool jao");
+  const recallAfter = await ask(principal, "kya yaad hai?");
+  ok(/kuch yaad nahi/.test(recallAfter.body.reply), "“bhool jao” forgets it", recallAfter.body);
+  const teacherClass = await ask(teacher, "bacchon ki attendance dikhao");
+  ok(teacherClass.body.source === "class_attendance", "a class teacher's “bacchon ki attendance” is their own class", teacherClass.body);
+  const several = await ask(principal, "Sharma ki fees batao");
+  ok(/kai students/.test(several.body.reply), "several matches are listed", several.body);
+  const picked = await ask(principal, "10 B wali");
+  ok(picked.body.source === "student_fees" && /Riya Sharma/.test(picked.body.reply), "“10 B wali” picks one of them", picked.body);
+  const riya = await ask(principal, "Riya ki fees kitni baaki hai?");
+  ok(/Riya Sharma/.test(riya.body.reply) && !/Priya|Shriya/.test(riya.body.reply), "names match from the start (Riya, not Priya / Shriya)", riya.body);
+
+  console.log("Actions: prepared by Jarvis, run by the normal endpoint after confirming");
+  // a leave request of our own, approved through Jarvis
+  const leave = await call(teacher, "POST", "/leaves", { type: "CASUAL", fromDate: "2027-03-15", toDate: "2027-03-15", reason: `${TAG} Jarvis test` });
+  if (leave.body?.id) created.leaves.push(leave.body.id);
+  const proposal = await ask(principal, "Rajesh Kumar ki leave approve karo");
+  ok(proposal.body.action?.method === "PATCH" && proposal.body.action.path === `/leaves/${leave.body?.id}` && !proposal.body.expectsReply, "Jarvis prepares the leave approval (nothing changes yet)", proposal.body);
+  const stillPending = await call(principal, "GET", "/leaves");
+  ok(JSON.stringify(stillPending.body).includes(leave.body?.id) && (stillPending.body as { id: string; status: string }[]).find((l) => l.id === leave.body?.id)?.status === "PENDING", "the leave is still pending before confirming");
+  const approved = await call(principal, proposal.body.action.method, proposal.body.action.path, proposal.body.action.body);
+  ok(approved.status === 200 && approved.body.status === "APPROVED", "confirming approves it through PATCH /leaves", approved.body);
+  const teacherCannot = await ask(teacher, "Priya Sharma ki leave approve karo");
+  ok(/available nahi/.test(teacherCannot.body.reply) && !teacherCannot.body.action, "a teacher cannot approve leaves", teacherCannot.body);
+
+  const noticeProposal = await ask(principal, `Class 10 A ke parents ko notice bhejo ki ${TAG} kal school 10 baje khulega`);
+  ok(noticeProposal.body.action?.path === "/announcements" && noticeProposal.body.action.body.audience?.[0]?.type === "SECTION", "Jarvis prepares a class notice", noticeProposal.body);
+  const posted = await call(principal, "POST", noticeProposal.body.action.path, noticeProposal.body.action.body);
+  if (posted.body?.id) created.notices.push(posted.body.id);
+  ok(posted.status === 201, "confirming posts it through POST /announcements", posted.body);
+
+  const feeProposal = await ask(accountant, "Aakash Tiwari ki fees UPI se jama karo");
+  ok(feeProposal.body.action?.path === "/fees/payments" && feeProposal.body.action.body.method === "UPI", "Jarvis prepares a counter fee payment", feeProposal.body);
+  const paid = await call(accountant, "POST", feeProposal.body.action.path, feeProposal.body.action.body);
+  if (paid.body?.id) created.payments.push(paid.body.id);
+  ok(paid.status === 201 && paid.body.receiptNo, "confirming records it through POST /fees/payments", paid.body);
+  const parentCannot = await ask(parent, "Mere bachche ki fees cash mein jama karo");
+  ok(!parentCannot.body.action, "a parent cannot record counter payments", parentCannot.body);
+
   console.log("Memory");
+  for (const token of [principal, accountant]) await call(token, "DELETE", "/assistant/history");
+  await ask(principal, "Aakash Tiwari ki fees kitni baaki hai?");
   const followUp = await ask(principal, "aur uske marks?");
   ok(followUp.status === 200 && followUp.body.source === "student_marks" && /Aakash Tiwari/.test(followUp.body.reply), "a follow-up uses the saved conversation (even after a refresh)", followUp.body);
   const history = await call(principal, "GET", "/assistant/history");
@@ -143,6 +238,7 @@ main()
   })
   .finally(async () => {
     for (const token of tokens) await call(token, "DELETE", "/assistant/history").catch(() => undefined);
+    await cleanup().catch((error) => { fail++; console.error("cleanup failed:", error); });
     console.log(`\n${pass} passed, ${fail} failed`);
     process.exitCode = fail ? 1 : 0;
     server.close();

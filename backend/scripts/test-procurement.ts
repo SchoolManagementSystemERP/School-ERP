@@ -157,6 +157,11 @@ async function cleanup() {
     const poIds = pos.map((p) => p.id);
     const bills = await tx.vendorBill.findMany({ where: { poId: { in: poIds } }, select: { id: true } });
     const payments = await tx.vendorPayment.findMany({ where: { billId: { in: bills.map((b) => b.id) } }, select: { id: true, expenseId: true } });
+    // ledger entries posted for the test bills, payments and their expenses go first
+    const sources = [...bills.map((x) => x.id), ...payments.map((x) => x.id), ...payments.map((x) => x.expenseId).filter((x): x is string => !!x)];
+    const sourceJournals = sources.length ? await tx.journalEntry.findMany({ where: { sourceId: { in: sources } }, select: { id: true } }) : [];
+    await tx.journalLine.deleteMany({ where: { journalEntryId: { in: sourceJournals.map((entry) => entry.id) } } });
+    await tx.journalEntry.deleteMany({ where: { id: { in: sourceJournals.map((entry) => entry.id) } } });
     await tx.vendorPayment.deleteMany({ where: { id: { in: payments.map((p) => p.id) } } });
     await tx.expense.deleteMany({ where: { id: { in: payments.map((p) => p.expenseId!).filter(Boolean) } } });
     await tx.vendorBill.deleteMany({ where: { id: { in: bills.map((b) => b.id) } } });

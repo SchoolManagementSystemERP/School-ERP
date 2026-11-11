@@ -22,6 +22,8 @@ interface Tool {
   staff: string[];
   /** Students / parents may use it for their own children. */
   self?: boolean;
+  /** Anyone signed in (the tool itself limits what it shows). */
+  everyone?: boolean;
   run: (env: ToolEnv, args: Args) => Promise<unknown>;
 }
 
@@ -91,13 +93,17 @@ async function findStudents(env: ToolEnv, args: Args, permission: string) {
   }
   if (!query) return { error: 'Student ka naam ya admission number batayein.' };
   const words = query.split(/\s+/).filter((w) => w.length > 1).slice(0, 3);
+  const className = str(args.className);
+  const inClass = className && branchIds.length ? await sectionIdsFor(tx, branchIds, className) : null;
   const students = await tx.student.findMany({
     where: {
       ...scope,
       status: 'ACTIVE',
+      ...(inClass ? { enrollments: { some: { academicYearId: year.id, sectionId: { in: inClass.map((c) => c.id) } } } } : {}),
       OR: [
         { admissionNo: query },
-        { AND: words.map((w) => ({ OR: [{ firstName: { contains: w } }, { lastName: { contains: w } }, { middleName: { contains: w } }] })) },
+        // names start with the spoken word: "Riya" finds Riya Sharma, not Priya or Shriya
+        { AND: words.map((w) => ({ OR: [{ firstName: { startsWith: w } }, { lastName: { startsWith: w } }, { middleName: { startsWith: w } }] })) },
       ],
     },
     select: { id: true },
@@ -139,6 +145,113 @@ async function oneStudent(env: ToolEnv, args: Args, permission: string): Promise
     return { error: 'Is naam ke kai students hain — class ya poora naam batayein.', matches: found.students.map((s) => `${s.name} (${s.class ?? '-'}, ${s.admissionNo})`) };
   }
   return { student };
+}
+
+
+const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+/** A YYYY-MM-DD argument, or today. */
+function dateArg(value: unknown) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`) : today();
+}
+
+async function ownStaffId(tx: Tx, ctx: RequestContext) {
+  return (await tx.staff.findFirst({ where: { userId: ctx.userId }, select: { id: true } }))?.id ?? null;
+}
+
+async function staffNames(tx: Tx, ids: (string | null)[]) {
+  const list = [...new Set(ids.filter((id): id is string => !!id))];
+  const rows = list.length ? await tx.staff.findMany({ where: { id: { in: list } }, select: { id: true, name: true } }) : [];
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/** Students and parents with no staff role see only their own children's things. */
+async function isSelfOnly(tx: Tx, ctx: RequestContext) {
+  return ctx.access.branchesWith().length === 0 || (ctx.access.branchesWith('students.read').length === 0 && (await ownStudentIds(tx, ctx)).length > 0);
+}
+
+/** Branches whose shared information (holidays, exams, notices) the user sees. */
+async function visibleBranches(env: ToolEnv) {
+  const { tx, ctx } = env;
+  const staff = ctx.activeBranchId ? [ctx.activeBranchId] : ctx.access.branchesWith();
+  if (staff.length) return staff;
+  const own = await tx.student.findMany({ where: { OR: [{ userId: ctx.userId }, { guardians: { some: { guardian: { userId: ctx.userId } } } }] }, select: { branchId: true } });
+  return [...new Set(own.map((s) => s.branchId))];
+}
+
+type SectionRef = { id: string; name: string; gradeName: string };
+/** The class a question is about: the one named (students / parents: only their own child's), else the child's class. */
+async function sectionsInQuestion(env: ToolEnv, args: Args): Promise<{ sections: SectionRef[] } | { error: string }> {
+  const { tx, ctx, year } = env;
+  const className = str(args.className) || str(args.class);
+  const selfOnly = await isSelfOnly(tx, ctx);
+  let childSections: SectionRef[] = [];
+  if (selfOnly) {
+    const own = await ownStudentIds(tx, ctx);
+    const enrollments = await tx.enrollment.findMany({
+      where: { academicYearId: year.id, studentId: { in: own } },
+      select: { section: { select: { id: true, name: true, grade: { select: { name: true } } } } },
+    });
+    childSections = [...new Map(enrollments.map((e) => [e.section.id, { id: e.section.id, name: `${e.section.grade.name} ${e.section.name}`, gradeName: e.section.grade.name }])).values()];
+  }
+  if (className) {
+    const found = await sectionIdsFor(tx, await visibleBranches(env), className);
+    let sections = (found ?? []).map((s) => ({ id: s.id, name: `${s.grade.name} ${s.name}`, gradeName: s.grade.name }));
+    if (selfOnly) sections = sections.filter((s) => childSections.some((c) => c.id === s.id));
+    if (!sections.length) return { error: `“${className}” class nahi mili${selfOnly ? ' (aap sirf apne bachche ki class dekh sakte hain)' : ''}.` };
+    return { sections };
+  }
+  return { sections: childSections };
+}
+
+/** Good-morning briefing: what this person should know today. */
+async function briefing(env: ToolEnv): Promise<unknown> {
+  const { tx, ctx } = env;
+  const can = (permission: string) => branchesFor(ctx, [permission]).length > 0;
+  const run = async (name: string, args: Args = {}) => (await TOOLS[name].run(env, args)) as Record<string, any>;
+  const nextHoliday = ((await run('holidays')).holidays ?? [])[0] ?? null;
+  if (can('reports.view')) {
+    const branchIds = branchesFor(ctx, ['reports.view']);
+    const [summary, leaves, sections] = await Promise.all([
+      run('school_summary'),
+      can('leave.approve') || can('staff.read') ? run('staff_leaves') : Promise.resolve(null),
+      tx.section.findMany({ where: { branchId: { in: branchIds } }, select: { id: true, name: true, grade: { select: { name: true, sortOrder: true } } } }),
+    ]);
+    const taken = await tx.attendanceSession.findMany({ where: { sectionId: { in: sections.map((s) => s.id) }, date: today(), periodNo: null }, select: { sectionId: true } });
+    const missing = sections.filter((s) => !taken.some((t) => t.sectionId === s.id)).sort((a, b) => a.grade.sortOrder - b.grade.sortOrder || a.name.localeCompare(b.name)).map((s) => `${s.grade.name} ${s.name}`);
+    const lowStock = can('inventory.manage') ? (await run('low_stock')).lowStock ?? null : null;
+    return { kind: 'office', name: ctx.name, summary, leaves, attendanceMissing: missing, totalClasses: sections.length, lowStock, nextHoliday };
+  }
+  const staffId = await ownStaffId(tx, ctx);
+  if (staffId) {
+    const [timetable, homework, myClass] = await Promise.all([
+      run('timetable'), run('homework'),
+      tx.section.findFirst({ where: { classTeacherId: staffId }, select: { id: true, name: true, grade: { select: { name: true } } } }),
+    ]);
+    let myClassAttendance: unknown = null;
+    if (myClass) {
+      const register = await tx.attendanceSession.findFirst({ where: { sectionId: myClass.id, date: today(), periodNo: null }, select: { entries: { select: { status: true } } } });
+      myClassAttendance = {
+        class: `${myClass.grade.name} ${myClass.name}`, taken: !!register,
+        present: register?.entries.filter((e) => e.status === 'PRESENT' || e.status === 'LATE').length ?? 0,
+        absent: register?.entries.filter((e) => e.status === 'ABSENT').length ?? 0,
+      };
+    }
+    return { kind: 'teacher', name: ctx.name, timetable, homework: homework.homework ?? [], myClassAttendance, nextHoliday };
+  }
+  const own = await ownStudentIds(tx, ctx);
+  if (own.length) {
+    const kids = await describeStudents(tx, env.year, own);
+    const children = [];
+    for (const kid of kids.slice(0, 3)) {
+      const fees = (await TOOLS.student_fees.run(env, { name: kid.admissionNo })) as Record<string, any>;
+      const entry = await tx.attendanceEntry.findFirst({ where: { studentId: kid.id, session: { date: today(), periodNo: null } }, select: { status: true } });
+      children.push({ name: kid.name, class: kid.class, todayAttendance: entry?.status ?? null, overdue: fees.overdueNow ?? 0, nextInstallment: fees.nextInstallment ?? null });
+    }
+    const [homework, exams] = await Promise.all([run('homework'), run('exam_schedule')]);
+    return { kind: 'family', name: ctx.name, children, homework: (homework.homework ?? []).slice(0, 5), nextExam: (exams.papers ?? [])[0] ?? null, nextHoliday };
+  }
+  return { kind: 'basic', name: ctx.name, nextHoliday };
 }
 
 export const TOOLS: Record<string, Tool> = {
@@ -415,13 +528,339 @@ export const TOOLS: Record<string, Tool> = {
       };
     },
   },
+
+  // ── everyday information ────────────────────────────────────────────────
+
+  timetable: {
+    description: 'Timetable for a day: a class\'s periods, the teacher\'s own periods, or the child\'s class.',
+    args: '{"className":"10 A optional","date":"YYYY-MM-DD optional"}',
+    staff: [],
+    everyone: true,
+    run: async (env, args) => {
+      const { tx, ctx } = env;
+      const date = dateArg(args.date);
+      const dow = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+      const day = DAY_NAMES[dow];
+      const target = await sectionsInQuestion(env, args);
+      if ('error' in target) return target;
+      if (target.sections.length) {
+        const periods = await tx.timetablePeriod.findMany({
+          where: { dayOfWeek: dow, sectionSubject: { sectionId: { in: target.sections.map((s) => s.id) }, academicYearId: env.year.id } },
+          select: { periodNo: true, startTime: true, endTime: true, sectionSubject: { select: { sectionId: true, teacherId: true, subject: { select: { name: true } } } } },
+          orderBy: [{ periodNo: 'asc' }],
+        });
+        const teachers = await staffNames(tx, periods.map((p) => p.sectionSubject.teacherId));
+        return {
+          day, date: toDateString(date),
+          classes: target.sections.map((s) => ({
+            class: s.name,
+            periods: periods.filter((p) => p.sectionSubject.sectionId === s.id).map((p) => ({
+              period: p.periodNo, time: `${p.startTime}-${p.endTime}`, subject: p.sectionSubject.subject.name,
+              teacher: p.sectionSubject.teacherId ? teachers.get(p.sectionSubject.teacherId) ?? null : null,
+            })),
+          })),
+        };
+      }
+      const staffId = await ownStaffId(tx, ctx);
+      if (!staffId) return { error: 'Class batayein, jaise “10 A ka timetable”.' };
+      const periods = await tx.timetablePeriod.findMany({
+        where: { dayOfWeek: dow, sectionSubject: { teacherId: staffId, academicYearId: env.year.id } },
+        select: { periodNo: true, startTime: true, endTime: true, sectionSubject: { select: { subject: { select: { name: true } }, section: { select: { name: true, grade: { select: { name: true } } } } } } },
+        orderBy: [{ periodNo: 'asc' }],
+      });
+      return {
+        day, date: toDateString(date), mine: true,
+        periods: periods.map((p) => ({ period: p.periodNo, time: `${p.startTime}-${p.endTime}`, subject: p.sectionSubject.subject.name, class: `${p.sectionSubject.section.grade.name} ${p.sectionSubject.section.name}` })),
+      };
+    },
+  },
+
+  homework: {
+    description: 'Homework / assignments due in the next 7 days for a class, the teacher\'s classes or the child\'s class.',
+    args: '{"className":"10 A optional"}',
+    staff: [],
+    everyone: true,
+    run: async (env, args) => {
+      const { tx, ctx } = env;
+      const target = await sectionsInQuestion(env, args);
+      if ('error' in target) return target;
+      let where: object;
+      if (target.sections.length) where = { sectionId: { in: target.sections.map((s) => s.id) } };
+      else {
+        const staffId = await ownStaffId(tx, ctx);
+        if (!staffId) return { error: 'Class batayein, jaise “10 A ka homework”.' };
+        where = { teacherId: staffId };
+      }
+      const from = today();
+      const rows = await tx.assignment.findMany({
+        where: { ...where, dueDate: { gte: from, lte: new Date(from.getTime() + 7 * DAY) } },
+        select: { title: true, dueDate: true, subjectId: true, sectionId: true },
+        orderBy: { dueDate: 'asc' }, take: 15,
+      });
+      const [subjects, sections] = await Promise.all([
+        tx.subject.findMany({ where: { id: { in: rows.map((r) => r.subjectId) } }, select: { id: true, name: true } }),
+        tx.section.findMany({ where: { id: { in: rows.map((r) => r.sectionId) } }, select: { id: true, name: true, grade: { select: { name: true } } } }),
+      ]);
+      return {
+        homework: rows.map((r) => ({
+          title: r.title, due: toDateString(r.dueDate),
+          subject: subjects.find((s) => s.id === r.subjectId)?.name ?? '',
+          class: (() => { const s = sections.find((x) => x.id === r.sectionId); return s ? `${s.grade.name} ${s.name}` : ''; })(),
+        })),
+      };
+    },
+  },
+
+  exam_schedule: {
+    description: 'Upcoming exam papers (date sheet), for a class or the child\'s class if known.',
+    args: '{"className":"10 A optional"}',
+    staff: [],
+    everyone: true,
+    run: async (env, args) => {
+      const { tx } = env;
+      const target = await sectionsInQuestion(env, args);
+      if ('error' in target) return target;
+      const grades = [...new Set(target.sections.map((s) => s.gradeName))];
+      const branchIds = await visibleBranches(env);
+      const papers = await tx.examPaper.findMany({
+        where: { date: { gte: today() }, exam: { academicYearId: env.year.id, OR: [{ branchId: null }, { branchId: { in: branchIds } }] } },
+        select: { date: true, startTime: true, endTime: true, subjectId: true, maxMarks: true, exam: { select: { name: true, gradeNames: true } } },
+        orderBy: { date: 'asc' }, take: 60,
+      });
+      const forGrades = grades.length ? papers.filter((p) => p.exam.gradeNames.split(',').map((g) => g.trim()).some((g) => grades.includes(g))) : papers;
+      const subjects = await tx.subject.findMany({ where: { id: { in: forGrades.map((p) => p.subjectId) } }, select: { id: true, name: true } });
+      return {
+        for: grades.length ? grades.join(', ') : 'all classes',
+        papers: forGrades.slice(0, 12).map((p) => ({
+          exam: p.exam.name, date: toDateString(p.date), time: `${p.startTime}-${p.endTime}`,
+          subject: subjects.find((s) => s.id === p.subjectId)?.name ?? '', maxMarks: Number(p.maxMarks),
+          ...(grades.length ? {} : { classes: p.exam.gradeNames }),
+        })),
+      };
+    },
+  },
+
+  transport: {
+    description: 'A student\'s school bus: route, stop, pickup time, vehicle and driver.',
+    args: '{"name":"student name"}',
+    staff: ['transport.manage', 'students.read'],
+    self: true,
+    run: async (env, args) => {
+      const found = await oneStudent(env, args, env.ctx.access.canAnywhere('transport.manage') ? 'transport.manage' : 'students.read');
+      if (!('student' in found)) return found;
+      const allocation = await env.tx.transportAllocation.findFirst({
+        where: { studentId: found.student.id, academicYearId: env.year.id },
+        select: { stopId: true },
+      });
+      if (!allocation) return { student: found.student.name, transport: 'school transport nahi leta / leti' };
+      const stop = await env.tx.routeStop.findUnique({ where: { id: allocation.stopId }, select: { name: true, routeId: true } });
+      const route = stop ? await env.tx.transportRoute.findUnique({ where: { id: stop.routeId }, select: { name: true, pickupTime: true, vehicleId: true } }) : null;
+      const vehicle = route?.vehicleId ? await env.tx.vehicle.findUnique({ where: { id: route.vehicleId }, select: { registrationNo: true, type: true, driverStaffId: true } }) : null;
+      const driver = vehicle?.driverStaffId ? await env.tx.staff.findUnique({ where: { id: vehicle.driverStaffId }, select: { name: true, phone: true } }) : null;
+      return {
+        student: found.student.name, class: found.student.class,
+        route: route?.name ?? null, stop: stop?.name ?? null, pickupTime: route?.pickupTime ?? null,
+        vehicle: vehicle ? `${vehicle.type} ${vehicle.registrationNo}` : null,
+        driver: driver ? `${driver.name}${driver.phone ? ` (${driver.phone})` : ''}` : null,
+      };
+    },
+  },
+
+  holidays: {
+    description: 'Upcoming school holidays and vacations (next 90 days).',
+    args: '{}',
+    staff: [],
+    everyone: true,
+    run: async (env) => {
+      const branchIds = await visibleBranches(env);
+      const from = today();
+      const rows = await env.tx.holiday.findMany({
+        where: { endDate: { gte: from }, startDate: { lte: new Date(from.getTime() + 90 * DAY) }, OR: [{ branchId: null }, { branchId: { in: branchIds } }] },
+        select: { name: true, startDate: true, endDate: true, type: true },
+        orderBy: { startDate: 'asc' }, take: 10,
+      });
+      return { holidays: rows.map((h) => ({ name: h.name, from: toDateString(h.startDate), to: toDateString(h.endDate), type: h.type })) };
+    },
+  },
+
+  notices: {
+    description: 'Notices / circulars on the notice board the user can see, newest first, optionally matching words.',
+    args: '{"query":"words optional"}',
+    staff: [],
+    everyone: true,
+    run: async (env, args) => {
+      const { tx, ctx } = env;
+      const own = await ownStudentIds(tx, ctx);
+      const selfOnly = own.length > 0 && ctx.access.branchesWith('students.read').length === 0;
+      let where: object;
+      if (selfOnly) {
+        const enrollments = await tx.enrollment.findMany({ where: { academicYearId: env.year.id, studentId: { in: own } }, select: { sectionId: true, branchId: true } });
+        const isParent = !(await tx.student.count({ where: { userId: ctx.userId } }));
+        where = {
+          OR: [{ branchId: { in: [...new Set(enrollments.map((e) => e.branchId))] } }, { branchId: null }],
+          audiences: { some: { OR: [{ audienceType: { in: ['EVERYONE', 'STUDENTS', ...(isParent ? ['PARENTS'] : [])] } }, { audienceType: 'SECTION', sectionId: { in: enrollments.map((e) => e.sectionId) } }] } },
+        };
+      } else {
+        const branchIds = ctx.activeBranchId ? [ctx.activeBranchId] : ctx.access.branchesWith();
+        if (!branchIds.length) return { error: 'Notice board dekhne ki permission nahi hai.' };
+        where = { OR: [{ branchId: { in: branchIds } }, { branchId: null }] };
+      }
+      const rows = await tx.announcement.findMany({ where, select: { title: true, body: true, category: true, priority: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 100 });
+      const words = str(args.query).toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      const matching = words.length ? rows.filter((r) => words.some((w) => `${r.title} ${r.body}`.toLowerCase().includes(w))) : rows;
+      return {
+        query: words.join(' ') || null,
+        notices: matching.slice(0, 5).map((r) => ({ title: r.title, text: r.body.replace(/\s+/g, ' ').slice(0, 220), category: r.category, priority: r.priority, date: toDateString(r.createdAt) })),
+      };
+    },
+  },
+
+  my_payslip: {
+    description: 'The signed-in staff member\'s own latest salary slip (gross, deductions, net).',
+    args: '{}',
+    staff: [],
+    everyone: true,
+    run: async ({ tx, ctx }) => {
+      const staffId = await ownStaffId(tx, ctx);
+      if (!staffId) return { error: 'Salary slip sirf staff ke liye hai.' };
+      const slip = await tx.payslip.findFirst({
+        where: { staffId },
+        select: { gross: true, deductions: true, net: true, payrollRun: { select: { month: true, status: true, paidAt: true } } },
+        orderBy: { payrollRun: { month: 'desc' } },
+      });
+      if (!slip) return { error: 'Abhi aapki koi salary slip nahi bani.' };
+      return { month: slip.payrollRun.month, status: slip.payrollRun.status, paidOn: toDateString(slip.payrollRun.paidAt), gross: money(slip.gross), deductions: money(slip.deductions), net: money(slip.net) };
+    },
+  },
+
+  school_info: {
+    description: 'The school\'s contact details and website information (phone, email, address, timings, admissions).',
+    args: '{}',
+    staff: [],
+    everyone: true,
+    run: async ({ tx, ctx }) => {
+      const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { name: true, contactEmail: true, contactPhone: true, settings: true } });
+      let site: Record<string, unknown> = {};
+      try { site = (JSON.parse(org.settings ?? '{}').website ?? {}) as Record<string, unknown>; } catch { /* no website profile */ }
+      const facts: Record<string, string> = {};
+      for (const [key, value] of Object.entries(site)) {
+        if (typeof value === 'string' && value.trim() && value.length <= 300 && /phone|email|address|timing|hours|admission|board|affiliation|principal|established|city|whatsapp|session/i.test(key)) facts[key] = value.trim();
+        if (typeof value === 'boolean' && /admission/i.test(key)) facts[key] = value ? 'yes' : 'no';
+      }
+      return { school: org.name, phone: org.contactPhone, email: org.contactEmail, ...facts };
+    },
+  },
+
+  daily_briefing: {
+    description: 'Good-morning briefing for the signed-in person: what needs attention today.',
+    args: '{}',
+    staff: [],
+    everyone: true,
+    run: async (env) => briefing(env),
+  },
+
+  // ── actions: Jarvis prepares, the person confirms, the normal ERP endpoint does the work ──
+
+  leave_decision: {
+    description: 'Prepare approving or rejecting a staff member\'s pending leave request (the user confirms).',
+    args: '{"name":"staff name","decision":"APPROVED|REJECTED"}',
+    staff: ['leave.approve'],
+    run: async ({ tx, ctx }, args) => {
+      const query = str(args.name);
+      const decision = args.decision === 'REJECTED' ? 'REJECTED' : 'APPROVED';
+      const words = query.split(/\s+/).filter((w) => w.length > 1).slice(0, 3);
+      const pending = await tx.leaveRequest.findMany({
+        where: { branchId: { in: branchesFor(ctx, ['leave.approve']) }, status: 'PENDING', ...(words.length ? { staff: { AND: words.map((w) => ({ name: { contains: w } })) } } : {}) },
+        select: { id: true, type: true, fromDate: true, toDate: true, reason: true, staff: { select: { name: true, userId: true } } },
+        orderBy: { fromDate: 'asc' }, take: 6,
+      });
+      const decidable = pending.filter((l) => l.staff.userId !== ctx.userId);
+      if (!decidable.length) return { error: query ? `${query} ki koi pending leave request nahi mili.` : 'Koi pending leave request nahi hai.' };
+      if (decidable.length > 1) return { error: 'Kai pending leave requests hain — naam batayein.', matches: decidable.map((l) => `${l.staff.name} (${toDateString(l.fromDate)} se ${toDateString(l.toDate)})`) };
+      const leave = decidable[0];
+      const days = Math.round((leave.toDate.getTime() - leave.fromDate.getTime()) / DAY) + 1;
+      return {
+        action: {
+          method: 'PATCH', path: `/leaves/${leave.id}`, body: { status: decision },
+          title: decision === 'APPROVED' ? 'Leave approve karein?' : 'Leave reject karein?',
+          summary: `${leave.staff.name} — ${leave.type} leave, ${toDateString(leave.fromDate)} se ${toDateString(leave.toDate)} (${days} din). Reason: ${leave.reason}`,
+          confirm: decision === 'APPROVED' ? 'Haan, approve karo' : 'Haan, reject karo',
+          done: `${leave.staff.name} ki leave ${decision === 'APPROVED' ? 'approve' : 'reject'} ho gayi.`,
+        },
+      };
+    },
+  },
+
+  send_notice: {
+    description: 'Prepare a notice for the notice board (to everyone, staff, students, parents or one class); the user confirms.',
+    args: '{"message":"notice text","audience":"EVERYONE|STAFF|STUDENTS|PARENTS","className":"10 A optional"}',
+    staff: ['announcements.send'],
+    run: async ({ tx, ctx }, args) => {
+      const message = typeof args.message === 'string' ? args.message.trim().slice(0, 2000) : '';
+      if (message.length < 3) return { error: 'Notice mein kya likhna hai? Poora boliye, jaise “class 10 A ke parents ko notice bhejo ki kal school band rahega”.' };
+      const branchIds = branchesFor(ctx, ['announcements.send']);
+      const branchId = ctx.activeBranchId && branchIds.includes(ctx.activeBranchId) ? ctx.activeBranchId : branchIds[0];
+      const className = str(args.className);
+      let audience: { type: string; sectionId?: string }[];
+      let to: string;
+      if (className) {
+        const sections = await sectionIdsFor(tx, [branchId], className);
+        if (!sections?.length) return { error: `“${className}” class nahi mili.` };
+        audience = sections.map((s) => ({ type: 'SECTION', sectionId: s.id }));
+        to = sections.map((s) => `${s.grade.name} ${s.name}`).join(', ');
+      } else {
+        const type = ['STAFF', 'STUDENTS', 'PARENTS'].includes(String(args.audience)) ? String(args.audience) : 'EVERYONE';
+        if (!ctx.access.can('reports.view', branchId)) return { error: 'Teachers sirf apni class ko notice bhej sakte hain — class batayein, jaise “10 A ko notice bhejo ki …”.' };
+        audience = [{ type }];
+        to = { EVERYONE: 'sabko', STAFF: 'staff ko', STUDENTS: 'students ko', PARENTS: 'parents ko' }[type] ?? 'sabko';
+      }
+      const title = message.split(/\s+/).slice(0, 8).join(' ').replace(/[.,;:!?]+$/, '');
+      return {
+        action: {
+          method: 'POST', path: '/announcements',
+          body: { title: title.charAt(0).toUpperCase() + title.slice(1), body: message.charAt(0).toUpperCase() + message.slice(1), category: 'GENERAL', priority: 'MEDIUM', audience, branchId },
+          title: 'Notice bhejein?',
+          summary: `${to}: “${message}”`,
+          confirm: 'Haan, notice bhejo',
+          done: 'Notice board par notice lag gaya.',
+        },
+      };
+    },
+  },
+
+  collect_fee: {
+    description: 'Prepare recording a fee payment at the counter for a student\'s next unpaid installment (the user confirms).',
+    args: '{"name":"student name","method":"CASH|UPI|CHEQUE|CARD"}',
+    staff: ['fees.collect'],
+    run: async (env, args) => {
+      const found = await oneStudent(env, args, 'fees.collect');
+      if (!('student' in found)) return found;
+      const [account] = await feeAccounts(env.tx, [found.student.id], env.year.id);
+      if (!account?.installments.length) return { error: `${found.student.name} ka is saal ka fee plan nahi mila.` };
+      const paid = await env.tx.feePayment.groupBy({ by: ['installmentId'], where: { studentId: found.student.id, status: 'SUCCESS', installmentId: { in: account.installments.map((i) => i.id) } }, _sum: { amount: true } });
+      const paidOf = (id: string) => money(paid.find((p) => p.installmentId === id)?._sum.amount);
+      const next = account.installments.find((i) => paidOf(i.id) < i.amount);
+      if (!next) return { error: `${found.student.name} ki is saal ki poori fees jama ho chuki hai.` };
+      const method = ['UPI', 'CHEQUE', 'CARD', 'NETBANKING'].includes(String(args.method)) ? String(args.method) : 'CASH';
+      const due = next.amount - paidOf(next.id);
+      return {
+        action: {
+          method: 'POST', path: '/fees/payments', body: { studentId: found.student.id, installmentId: next.id, method },
+          title: 'Fees jama karein?',
+          summary: `${found.student.name} (${found.student.class ?? '-'}) — ${next.name}, ₹${due.toLocaleString('en-IN')} ${method}. Due date ${next.dueDate}; late fee lagi to receipt mein jud jayegi.`,
+          confirm: `Haan, ₹${due.toLocaleString('en-IN')} jama karo`,
+          done: `${found.student.name} ki ${next.name} jama ho gayi — receipt Fees page par hai.`,
+        },
+      };
+    },
+  },
 };
 
 /** Tools this user may call (by permission), for the model's menu. */
 export async function availableTools(tx: Tx, ctx: RequestContext) {
   const isSelf = (await ownStudentIds(tx, ctx)).length > 0;
   return Object.entries(TOOLS)
-    .filter(([, tool]) => tool.staff.some((p) => branchesFor(ctx, [p]).length > 0) || (tool.self && isSelf))
+    .filter(([, tool]) => tool.staff.some((p) => branchesFor(ctx, [p]).length > 0) || (tool.self && isSelf) || (tool.everyone && (isSelf || ctx.access.branchesWith().length > 0)))
     .map(([name]) => name);
 }
 

@@ -60,6 +60,8 @@ const RECOGNITION_ERRORS: Record<string, string> = {
 };
 
 type PageLink = { href: string; label: string };
+/** A change Jarvis prepared (approve a leave, post a notice, record a fee); it runs only after "Haan". */
+type JarvisAction = { method: "POST" | "PATCH" | "PUT"; path: string; body: unknown; title: string; summary: string; confirm: string; done: string };
 type ChatMessage = { role: "user" | "assistant"; content: string; fromData?: boolean };
 type ModelStatus = { available: boolean; model: string; message: string };
 type SpeechWorkerMessage =
@@ -279,6 +281,10 @@ export function VoiceAssistant() {
   const [speechFile, setSpeechFile] = useState("");
   const [command, setCommand] = useState("");
   const [target, setTarget] = useState<PageLink | null>(null);
+  const [pendingAction, setPendingAction] = useState<JarvisAction | null>(null);
+  const [runningAction, setRunningAction] = useState(false);
+  // the action is also read from voice handlers created earlier, so keep it in a ref too
+  const pendingActionRef = useRef<{ action: JarvisAction; key: string } | null>(null);
   const [attendanceDraft, setAttendanceDraft] = useState<AttendanceDraft | null>(null);
   const [savingAttendance, setSavingAttendance] = useState(false);
   const [message, setMessage] = useState("");
@@ -378,6 +384,35 @@ export function VoiceAssistant() {
   const awaitingAnswerRef = useRef(false);
   const listenAfterReplyRef = useRef(false);
 
+  /** Runs the confirmed change through the normal ERP endpoint (its own permission checks and audit log). */
+  const runAction = async () => {
+    const pending = pendingActionRef.current;
+    if (!pending || runningAction) return;
+    setRunningAction(true);
+    try {
+      const { action, key } = pending;
+      if (action.method === "PATCH") await api.patch(action.path, action.body);
+      else if (action.method === "PUT") await api.put(action.path, action.body);
+      // the idempotency key stops a double tap from recording a payment twice
+      else await api.post(action.path, action.body, { headers: { "Idempotency-Key": key } });
+      setChat((previous) => [...previous, { role: "assistant" as const, content: `✓ ${action.done}` }].slice(-60));
+      setMessage(action.done);
+    } catch (error) {
+      setMessage(`Kaam nahi hua: ${errorMessage(error)}`);
+    } finally {
+      pendingActionRef.current = null;
+      setPendingAction(null);
+      setRunningAction(false);
+    }
+  };
+  const cancelAction = () => {
+    pendingActionRef.current = null;
+    setPendingAction(null);
+    setMessage("Theek hai, kuch nahi badla.");
+  };
+  const runActionRef = useRef(runAction);
+  runActionRef.current = runAction;
+
   const askAssistant = async (question: string, handsFree = false) => {
     const text = question.trim();
     if (!text || thinking) return;
@@ -389,7 +424,7 @@ export function VoiceAssistant() {
     // the server trims this further; a long prompt is what makes a CPU-only model slow
     const pageText = (document.querySelector("main")?.innerText ?? "").replace(/\s+/g, " ").trim().slice(0, 6_000);
     try {
-      const result = await api.post<{ reply: string; navigation: PageLink | null; model: string; source: string | null; expectsReply?: boolean }>("/assistant/chat", {
+      const result = await api.post<{ reply: string; navigation: PageLink | null; model: string; source: string | null; expectsReply?: boolean; action?: JarvisAction }>("/assistant/chat", {
         // the server reads the saved memory; this short copy is only used when nothing is saved yet
         messages: nextChat.slice(-12).map(({ role, content }) => ({ role, content })),
         pagePath: location.pathname,
@@ -413,6 +448,10 @@ export function VoiceAssistant() {
       // and in hands-free mode it listens again by itself once it has finished speaking
       awaitingAnswerRef.current = !!result.expectsReply;
       if (result.expectsReply && handsFree) listenAfterReplyRef.current = true;
+      // a prepared change: show the confirm card (hands-free: "haan" / "nahi" by voice)
+      pendingActionRef.current = result.action ? { action: result.action, key: crypto.randomUUID() } : null;
+      setPendingAction(result.action ?? null);
+      if (result.action && handsFree) listenAfterReplyRef.current = true;
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -421,6 +460,22 @@ export function VoiceAssistant() {
   };
 
   const handleVoiceCommand = (heard: string, handsFree = false) => {
+    // a prepared change is waiting: a clear spoken "haan" runs it, "nahi" cancels it
+    if (pendingActionRef.current) {
+      const reply = normalize(heard);
+      if (/^(haan|han|ha|haa|yes|confirm|kar do|karo|theek hai|thik hai|ok|okay)\b/.test(reply) && !/\b(nahi|nhi|mat|no)\b/.test(reply)) {
+        setPendingTranscript("");
+        setCommand(heard);
+        void runActionRef.current();
+        return;
+      }
+      if (/^(nahi|nhi|no|cancel|mat|rehne do|chhodo|chodo)\b/.test(reply)) {
+        setPendingTranscript("");
+        setCommand(heard);
+        cancelAction();
+        return;
+      }
+    }
     setPendingTranscript("");
     setCommand(heard);
     setTarget(null);
@@ -1131,7 +1186,33 @@ export function VoiceAssistant() {
                 {thinking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {thinking ? "Soch raha hai…" : "Ask assistant"}
               </Button>
+              <div className="flex flex-wrap gap-1.5">
+                {["Good morning — aaj ka briefing", "Aaj ka timetable", "Agli chhutti kab hai?", "Kya yaad hai?"].map((quick) => (
+                  <button
+                    key={quick}
+                    type="button"
+                    disabled={thinking}
+                    className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+                    onClick={() => void askAssistant(quick)}
+                  >
+                    {quick}
+                  </button>
+                ))}
+              </div>
             </form>
+            {pendingAction && (
+              <div className="space-y-2 rounded-lg border-2 border-amber-500/60 bg-amber-500/5 p-3">
+                <p className="text-sm font-semibold">{pendingAction.title}</p>
+                <p className="text-sm">{pendingAction.summary}</p>
+                <p className="text-xs text-muted-foreground">Confirm karne par hi kaam hoga — ERP ke normal niyam aur audit log lagenge.</p>
+                <div className="flex gap-2">
+                  <Button className="flex-1" disabled={runningAction} onClick={() => void runAction()}>
+                    {runningAction ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {pendingAction.confirm}
+                  </Button>
+                  <Button variant="outline" disabled={runningAction} onClick={cancelAction}>Cancel</Button>
+                </div>
+              </div>
+            )}
             {target && (
               <div className="flex gap-2">
                 <Button className="flex-1" onClick={confirmNavigation}>
