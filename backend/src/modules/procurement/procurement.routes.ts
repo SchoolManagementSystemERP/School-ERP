@@ -12,12 +12,16 @@ import { decryptJson, encryptJson } from "../../lib/crypto.js";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../../lib/errors.js";
 import { dateOnly, idParam, toDateString } from "../../lib/http.js";
 import { ctxOf } from "../../middleware/authenticate.js";
+import { paymentLedgerLine, postJournal } from "../finance/ledger.js";
 
 export const procurementRouter = Router();
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
-const DEFAULT_SETTINGS = { principalLimit: 50000, quotationThreshold: 5000, minQuotations: 3, pettyCashFloat: 10000, pettyCashVoucherLimit: 2000 };
+const DEFAULT_SETTINGS = {
+  principalLimit: 50000, quotationThreshold: 5000, minQuotations: 3,
+  pettyCashFloat: 10000, pettyCashVoucherLimit: 2000, financeApprovalThreshold: 50000,
+};
 type Settings = typeof DEFAULT_SETTINGS;
 
 async function settingsOf(tx: Tx, organizationId: string): Promise<Settings> {
@@ -34,6 +38,60 @@ async function settingsOf(tx: Tx, organizationId: string): Promise<Settings> {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const num = (d: unknown) => Number(d ?? 0);
 const todayDate = () => new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z");
+function fullFyCode(d = new Date()) {
+  const start = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+
+async function assertBudgetAvailable(
+  tx: Tx,
+  branchId: string,
+  department: string,
+  lines: Array<{ category?: string | null; qty: number; estRate: unknown; toPurchase?: number | null }>,
+  excludeIndentId?: string,
+) {
+  const fiscalYear = fullFyCode();
+  await tx.departmentBudget.updateMany({
+    where: { branchId, department, fiscalYear, isActive: true, hardStop: true },
+    data: { allocated: { increment: 0 } },
+  });
+  const budgets = await tx.departmentBudget.findMany({
+    where: { branchId, department, fiscalYear, isActive: true, hardStop: true },
+  });
+  if (!budgets.length) return;
+
+  const yearStart = new Date(Date.UTC(Number(fiscalYear.slice(0, 4)), 3, 1));
+  const yearEnd = new Date(Date.UTC(Number(fiscalYear.slice(0, 4)) + 1, 3, 1));
+  const expenses = await tx.expense.findMany({
+    where: { branchId, department, date: { gte: yearStart, lt: yearEnd } },
+    select: { category: true, amount: true },
+  });
+  const activeIndents = await tx.indent.findMany({
+    where: {
+      branchId, department, createdAt: { gte: yearStart, lt: yearEnd },
+      status: { notIn: ["COMPLETED", "REJECTED", "CANCELLED"] },
+      ...(excludeIndentId ? { id: { not: excludeIndentId } } : {}),
+    },
+    include: { lines: { select: { category: true, qty: true, estRate: true, toPurchase: true } } },
+  });
+
+  for (const budget of budgets) {
+    const matches = (category: string | null | undefined) => budget.category === "All"
+      ? true
+      : category === budget.category;
+    const spent = expenses.filter((expense) => budget.category === "All" || expense.category === budget.category)
+      .reduce((sum, expense) => sum + num(expense.amount), 0);
+    const committed = activeIndents.flatMap((indent) => indent.lines).filter((line) => matches(line.category))
+      .reduce((sum, line) => sum + (line.toPurchase ?? line.qty) * num(line.estRate), 0);
+    const proposed = lines.filter((line) => matches(line.category))
+      .reduce((sum, line) => sum + (line.toPurchase ?? line.qty) * num(line.estRate), 0);
+    if (round2(spent + committed + proposed) > num(budget.allocated)) {
+      throw badRequest(
+        `Budget hard stop: ${department} / ${budget.category} has ₹${round2(Math.max(0, num(budget.allocated) - spent - committed)).toLocaleString("en-IN")} available, but this requisition adds ₹${round2(proposed).toLocaleString("en-IN")}.`,
+      );
+    }
+  }
+}
 
 /** Financial year code "26-27" (April–March). */
 function fyCode(d = new Date()) {
@@ -152,6 +210,7 @@ const lineInput = z.object({
   unit: z.string().trim().min(1).max(20),
   estRate: z.number().min(0).max(10_000_000),
   inventoryItemId: z.string().uuid().optional(),
+  category: z.string().trim().max(60).optional(),
 });
 
 /** POST /procurement/indents — raise a requisition. Skips the HOD when the department has none or the HOD raised it. */
@@ -172,19 +231,23 @@ procurementRouter.post("/procurement/indents", async (req, res) => {
     const me = await staffOf(tx, ctx.userId);
     const department = me?.department ?? body.department;
     if (!department) throw badRequest("Which department is this for?");
+    await assertBudgetAvailable(tx, branchId, department, body.lines);
     const hod = await hodOf(tx, branchId, department);
     const skipHod = !hod || hod.userId === ctx.userId;
     const created = await tx.indent.create({
       data: {
         organizationId: ctx.organizationId, branchId, no: await nextNo(tx, "PR", ctx.organizationId), requestedById: ctx.userId, requesterName: ctx.name,
         department, location: body.location, purpose: body.purpose, priority: body.priority, neededBy: body.neededBy, status: skipHod ? "PENDING_STORE" : "PENDING_HOD",
-        lines: { create: body.lines.map((l, n) => ({ organizationId: ctx.organizationId, lineNo: n, name: l.name, qty: l.qty, unit: l.unit, estRate: l.estRate, inventoryItemId: l.inventoryItemId ?? null })) },
+        lines: { create: body.lines.map((l, n) => ({ organizationId: ctx.organizationId, lineNo: n, name: l.name, qty: l.qty, unit: l.unit, estRate: l.estRate, inventoryItemId: l.inventoryItemId ?? null, category: l.category ?? null })) },
       },
     });
     // the store raises PRs itself too (reorders); everyone else is a requester
     await addEvent(tx, ctx, created.id, ctx.access.can("procurement.store", branchId) ? "STORE" : "TEACHER", "Raised purchase requisition");
     if (skipHod) await addEvent(tx, ctx, created.id, "SYSTEM", "HOD step skipped", hod ? "Raised by the HOD" : `${department} department has no HOD — sent to store`, true);
-    await audit(tx, ctx, { action: "CREATE", entity: "Indent", entityId: created.id, branchId, after: body });
+    await audit(tx, ctx, {
+      action: "CREATE", entity: "Indent", entityId: created.id, branchId,
+      after: { no: created.no, department, priority: body.priority, lineCount: body.lines.length, status: created.status },
+    });
     return loadIndent(tx, created.id);
   });
   res.status(201).json(indentOut(indent!));
@@ -201,6 +264,10 @@ procurementRouter.post("/procurement/indents/:id/cancel", async (req, res) => {
     requireStatus(i, "PENDING_HOD", "PENDING_STORE", "PENDING_PRINCIPAL", "PENDING_MANAGEMENT", "APPROVED_FOR_PURCHASE");
     await tx.indent.update({ where: { id }, data: { status: "CANCELLED" } });
     await addEvent(tx, ctx, id, "TEACHER", "Cancelled", reason);
+    await audit(tx, ctx, {
+      action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId,
+      before: { status: i.status }, after: { status: "CANCELLED", reasonProvided: true },
+    });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -216,8 +283,10 @@ procurementRouter.post("/procurement/indents/:id/hod", async (req, res) => {
     const me = await staffOf(tx, ctx.userId);
     if (!me?.isHod || me.department !== i.department || me.branchId !== i.branchId) throw forbidden("Only the HOD of this department can decide.");
     requireStatus(i, "PENDING_HOD");
-    await tx.indent.update({ where: { id }, data: { status: d.approve ? "PENDING_STORE" : "REJECTED" } });
+    const status = d.approve ? "PENDING_STORE" : "REJECTED";
+    await tx.indent.update({ where: { id }, data: { status } });
     await addEvent(tx, ctx, id, "HOD", d.approve ? "Approved" : "Rejected", d.remark);
+    await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId, before: { status: i.status }, after: { status, remarkProvided: !!d.remark } });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -252,10 +321,25 @@ procurementRouter.post("/procurement/indents/:id/store-check", async (req, res) 
       est += (l.qty - d.issue) * d.estRate;
       await tx.indentLine.update({ where: { id: l.id }, data: { issuedFromStock: d.issue, toPurchase: l.qty - d.issue, estRate: d.estRate, inventoryItemId: itemId, category: d.category ?? l.category } });
     }
+    await assertBudgetAvailable(tx, i.branchId, i.department, i.lines.map((line, n) => ({
+      category: body.lines[n].category ?? line.category,
+      qty: line.qty - body.lines[n].issue,
+      estRate: body.lines[n].estRate,
+    })), i.id);
     const toBuy = round2(est) > 0 || body.lines.some((d, n) => i.lines[n].qty - d.issue > 0);
     await tx.indent.update({ where: { id }, data: { status: toBuy ? "PENDING_PRINCIPAL" : "COMPLETED" } });
+    const status = toBuy ? "PENDING_PRINCIPAL" : "COMPLETED";
     const summary = [issued.length ? `Issued from stock: ${issued.join(", ")}` : "", toBuy ? `To purchase, est. ₹${round2(est).toLocaleString("en-IN")}` : "Everything issued from stock", body.remark].filter(Boolean).join(" · ");
     await addEvent(tx, ctx, id, "STORE", "Store check", summary);
+    await audit(tx, ctx, {
+      action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId,
+      before: { status: i.status },
+      after: {
+        status, issuedLineCount: issued.length,
+        issuedUnits: body.lines.reduce((sum, line) => sum + line.issue, 0),
+        purchaseEstimate: round2(est),
+      },
+    });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -270,10 +354,16 @@ procurementRouter.post("/procurement/indents/:id/principal", async (req, res) =>
     if (!i) throw notFound("Indent");
     need(ctx, "procurement.approve", i.branchId);
     requireStatus(i, "PENDING_PRINCIPAL");
+    if (d.approve) {
+      await assertBudgetAvailable(tx, i.branchId, i.department, i.lines.map((line) => ({
+        category: line.category, qty: line.qty, estRate: line.estRate, toPurchase: line.toPurchase,
+      })), i.id);
+    }
     const over = purchaseEstimate(i) > (await settingsOf(tx, ctx.organizationId)).principalLimit;
     const status = !d.approve ? "REJECTED" : over ? "PENDING_MANAGEMENT" : "APPROVED_FOR_PURCHASE";
     await tx.indent.update({ where: { id }, data: { status } });
     await addEvent(tx, ctx, id, "PRINCIPAL", d.approve ? "Approved" : "Rejected", [d.remark, d.approve && over ? "Above the principal's limit — sent to Management." : ""].filter(Boolean).join(" "));
+    await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId, before: { status: i.status }, after: { status, remarkProvided: !!d.remark } });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -287,8 +377,10 @@ procurementRouter.post("/procurement/indents/:id/management", async (req, res) =
     if (!i) throw notFound("Indent");
     need(ctx, "procurement.approve_management", i.branchId);
     requireStatus(i, "PENDING_MANAGEMENT");
-    await tx.indent.update({ where: { id }, data: { status: d.approve ? "APPROVED_FOR_PURCHASE" : "REJECTED" } });
+    const status = d.approve ? "APPROVED_FOR_PURCHASE" : "REJECTED";
+    await tx.indent.update({ where: { id }, data: { status } });
     await addEvent(tx, ctx, id, "MANAGEMENT", d.approve ? "Approved" : "Rejected", d.remark);
+    await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId, before: { status: i.status }, after: { status, remarkProvided: !!d.remark } });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -331,7 +423,10 @@ procurementRouter.post("/procurement/vendors", async (req, res) => {
     const codes = await tx.vendor.findMany({ where: { code: { startsWith: "V-" } }, select: { code: true } });
     const code = `V-${String(codes.reduce((m, c) => Math.max(m, Number(c.code?.slice(2)) || 0), 0) + 1).padStart(4, "0")}`;
     const created = await tx.vendor.create({ data: { ...v, code, gstin: v.gstin || null, pan: v.pan || null, email: v.email || null, organizationId: ctx.organizationId, bankAccount: bank ? encryptJson(bank) : null } });
-    await audit(tx, ctx, { action: "CREATE", entity: "Vendor", entityId: created.id, after: { ...v, bank: bank ? "set" : undefined } });
+    await audit(tx, ctx, {
+      action: "CREATE", entity: "Vendor", entityId: created.id,
+      after: { name: v.name, category: v.category, tdsSection: v.tdsSection, isIndividual: v.isIndividual, isActive: v.isActive, bankAccountConfigured: !!bank },
+    });
     return created;
   });
   res.status(201).json(vendorOut(vendor));
@@ -343,9 +438,14 @@ procurementRouter.put("/procurement/vendors/:id", async (req, res) => {
   if (!ctx.access.canAnywhere("procurement.store")) throw forbidden();
   const { bank, ...v } = vendorInput.parse(req.body);
   const vendor = await withTenant(ctx.organizationId, async (tx) => {
-    if (!(await tx.vendor.findUnique({ where: { id } }))) throw notFound("Vendor");
+    const existing = await tx.vendor.findUnique({ where: { id } });
+    if (!existing) throw notFound("Vendor");
     const updated = await tx.vendor.update({ where: { id }, data: { ...v, gstin: v.gstin || null, pan: v.pan || null, email: v.email || null, ...(bank ? { bankAccount: encryptJson(bank) } : {}) } });
-    await audit(tx, ctx, { action: "UPDATE", entity: "Vendor", entityId: id, after: { ...v, bank: bank ? "changed" : undefined } });
+    await audit(tx, ctx, {
+      action: "UPDATE", entity: "Vendor", entityId: id,
+      before: { name: existing.name, isActive: existing.isActive },
+      after: { name: v.name, category: v.category, tdsSection: v.tdsSection, isIndividual: v.isIndividual, isActive: v.isActive, bankAccountChanged: !!bank },
+    });
     return updated;
   });
   res.json(vendorOut(vendor));
@@ -396,6 +496,7 @@ procurementRouter.delete("/procurement/quotations/:id", async (req, res) => {
     requireStatus(i, "APPROVED_FOR_PURCHASE");
     await tx.quotationLine.deleteMany({ where: { quotationId: id } });
     await tx.quotation.delete({ where: { id } });
+    await audit(tx, ctx, { action: "DELETE", entity: "Quotation", entityId: id, branchId: i.branchId, before: { indentId: i.id, vendorId: q.vendorId } });
   });
   res.status(204).end();
 });
@@ -415,7 +516,12 @@ procurementRouter.post("/procurement/indents/:id/quotations", async (req, res) =
     if (!vendor?.isActive) throw badRequest("Choose an active vendor.");
     if (await tx.quotation.count({ where: { indentId: id, vendorId: body.vendorId } })) throw conflict(`${vendor.name} has already quoted for this indent.`);
     for (const l of i.lines.filter((x) => (x.toPurchase ?? 0) > 0)) if (!body.lines.some((q) => q.lineNo === l.lineNo)) throw badRequest(`Enter ${vendor.name}'s rate for ${l.name}.`);
-    return tx.quotation.create({ data: { organizationId: ctx.organizationId, indentId: id, vendorId: body.vendorId, gstPercent: body.gstPercent, deliveryDays: body.deliveryDays, validTill: body.validTill, notes: body.notes ?? null, lines: { create: body.lines.map((l) => ({ organizationId: ctx.organizationId, lineNo: l.lineNo, rate: l.rate })) } } });
+    const quotation = await tx.quotation.create({ data: { organizationId: ctx.organizationId, indentId: id, vendorId: body.vendorId, gstPercent: body.gstPercent, deliveryDays: body.deliveryDays, validTill: body.validTill, notes: body.notes ?? null, lines: { create: body.lines.map((l) => ({ organizationId: ctx.organizationId, lineNo: l.lineNo, rate: l.rate })) } } });
+    await audit(tx, ctx, {
+      action: "CREATE", entity: "Quotation", entityId: quotation.id, branchId: i.branchId,
+      after: { indentId: i.id, vendorId: quotation.vendorId, lineCount: body.lines.length, validTill: toDateString(quotation.validTill) },
+    });
+    return quotation;
   });
   res.status(201).json({ id: out.id });
 });
@@ -494,7 +600,8 @@ procurementRouter.post("/procurement/purchase-orders/:id/cancel", async (req, re
     await tx.purchaseOrder.update({ where: { id: poId }, data: { status: "CANCELLED" } });
     await tx.indent.update({ where: { id: po.indentId }, data: { status: "APPROVED_FOR_PURCHASE" } });
     await addEvent(tx, ctx, po.indentId, "PURCHASE", `Purchase order ${po.no} cancelled`, reason);
-    await audit(tx, ctx, { action: "UPDATE", entity: "PurchaseOrder", entityId: poId, branchId: po.branchId, before: { status: po.status }, after: { status: "CANCELLED", reason } });
+    await audit(tx, ctx, { action: "UPDATE", entity: "PurchaseOrder", entityId: poId, branchId: po.branchId, before: { status: po.status }, after: { status: "CANCELLED", reasonProvided: true } });
+    await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: po.indentId, branchId: po.branchId, before: { status: "PO_RAISED" }, after: { status: "APPROVED_FOR_PURCHASE", reasonProvided: true } });
   });
   res.json({ ok: true });
 });
@@ -550,12 +657,27 @@ procurementRouter.post("/procurement/purchase-orders/:id/receipts", async (req, 
     }
     const lines = await tx.purchaseOrderLine.findMany({ where: { poId } });
     const complete = lines.every((l) => l.received >= l.qty);
-    await tx.purchaseOrder.update({ where: { id: poId }, data: { status: complete ? "RECEIVED" : "PARTIALLY_RECEIVED" } });
+    const status = complete ? "RECEIVED" : "PARTIALLY_RECEIVED";
+    await tx.purchaseOrder.update({ where: { id: poId }, data: { status } });
     const grn = await tx.goodsReceipt.create({
       data: { organizationId: ctx.organizationId, branchId: po.branchId, no: await nextNo(tx, "GRN", ctx.organizationId), poId, receivedOn: todayDate(), receivedById: ctx.userId, checkedBy: body.checkedBy, challanNo: body.challanNo,
         lines: { create: used.map((l) => ({ organizationId: ctx.organizationId, lineNo: l.lineNo, received: l.received, accepted: l.accepted, rejectedReason: l.rejectedReason || null })) } },
     });
-    if (complete) await tx.indent.update({ where: { id: po.indentId }, data: { status: "GOODS_RECEIVED" } });
+    await audit(tx, ctx, {
+      action: "CREATE", entity: "GoodsReceipt", entityId: grn.id, branchId: po.branchId,
+      after: {
+        no: grn.no, poId, lineCount: used.length,
+        receivedUnits: used.reduce((sum, line) => sum + line.received, 0),
+        acceptedUnits: used.reduce((sum, line) => sum + line.accepted, 0),
+      },
+    });
+    if (po.status !== status) {
+      await audit(tx, ctx, { action: "UPDATE", entity: "PurchaseOrder", entityId: poId, branchId: po.branchId, before: { status: po.status }, after: { status } });
+    }
+    if (complete) {
+      await tx.indent.update({ where: { id: po.indentId }, data: { status: "GOODS_RECEIVED" } });
+      await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: po.indentId, branchId: po.branchId, before: { status: indent.status }, after: { status: "GOODS_RECEIVED" } });
+    }
     await addEvent(tx, ctx, po.indentId, "STORE", `Goods received — ${grn.no}`, `${used.reduce((s, l) => s + l.received, 0)} received, ${used.reduce((s, l) => s + l.accepted, 0)} accepted · checked by ${body.checkedBy}${complete ? "" : " · rest still due"}`);
     return grn;
   });
@@ -577,6 +699,7 @@ procurementRouter.post("/procurement/indents/:id/issue", async (req, res) => {
     }
     await tx.indent.update({ where: { id }, data: { status: "COMPLETED" } });
     await addEvent(tx, ctx, id, "STORE", "Issued to requester", `Handed to ${i.location}`);
+    await audit(tx, ctx, { action: "UPDATE", entity: "Indent", entityId: id, branchId: i.branchId, before: { status: i.status }, after: { status: "COMPLETED", issuedLines: po.lines.filter((line) => line.accepted > 0).length } });
     return loadIndent(tx, id);
   });
   res.json(indentOut(out!));
@@ -629,11 +752,37 @@ procurementRouter.post("/payables/bills/:id/decision", async (req, res) => {
   const bill = await withTenant(ctx.organizationId, async (tx) => {
     const b = await tx.vendorBill.findUnique({ where: { id } });
     if (!b) throw notFound("Bill");
-    need(ctx, "payables.manage", b.branchId);
     if (b.status === "PAID") throw conflict("Already paid.");
-    if (body.action === "approve" && b.status === "MISMATCH" && !body.note) throw badRequest("The bill does not match PO + GRN — write why it can still be paid.");
-    const updated = await tx.vendorBill.update({ where: { id }, data: { status: body.action === "approve" ? "APPROVED" : "ON_HOLD", note: body.note || b.note } });
-    await audit(tx, ctx, { action: "UPDATE", entity: "VendorBill", entityId: id, branchId: b.branchId, before: { status: b.status }, after: body });
+    if (body.action === "approve" && !["MATCHED", "MISMATCH", "ON_HOLD", "FIN_REVIEW"].includes(b.status)) {
+      throw conflict("This bill is not at an approval stage.");
+    }
+    const financeStage = b.status === "FIN_REVIEW";
+    if (financeStage) {
+      need(ctx, "accounting.manage", b.branchId);
+      if (body.action === "approve" && b.payablesApprovedById === ctx.userId) {
+        throw forbidden("The finance approval must be completed by someone other than the Accounts Payables approver.");
+      }
+    } else {
+      need(ctx, "payables.manage", b.branchId);
+    }
+    if (body.action === "approve" && Math.abs(num(b.total) - num(b.expected)) > 1 && !body.note) {
+      throw badRequest("The bill does not match PO + GRN — write why it can still be paid.");
+    }
+    const settings = await settingsOf(tx, ctx.organizationId);
+    const nextStatus = body.action === "hold" ? "ON_HOLD"
+      : financeStage ? "APPROVED"
+        : num(b.total) >= settings.financeApprovalThreshold ? "FIN_REVIEW" : "APPROVED";
+    const updated = await tx.vendorBill.update({
+      where: { id },
+      data: {
+        status: nextStatus, note: body.note || b.note,
+        ...(nextStatus === "FIN_REVIEW" ? { payablesApprovedById: ctx.userId } : {}),
+      },
+    });
+    await audit(tx, ctx, {
+      action: "UPDATE", entity: "VendorBill", entityId: id, branchId: b.branchId,
+      before: { status: b.status }, after: { action: body.action, status: updated.status, noteProvided: !!body.note, financeReviewRequired: nextStatus === "FIN_REVIEW" },
+    });
     return updated;
   });
   res.json({ id: bill.id, status: bill.status });
@@ -648,17 +797,32 @@ procurementRouter.post("/payables/bills/:id/pay", async (req, res) => {
     const b = await tx.vendorBill.findUnique({ where: { id } });
     if (!b) throw notFound("Bill");
     need(ctx, "payables.manage", b.branchId);
+    if (num(b.total) >= (await settingsOf(tx, ctx.organizationId)).financeApprovalThreshold && b.status !== "APPROVED") {
+      throw conflict("This bill must complete Finance Manager approval before payment.");
+    }
     if (b.status !== "MATCHED" && b.status !== "APPROVED") throw conflict(b.status === "PAID" ? "Already paid." : "Approve the bill first.");
     const vendor = await tx.vendor.findUniqueOrThrow({ where: { id: b.vendorId } });
     const tds = tdsFor(num(b.subtotal), vendor);
-    const po = await tx.purchaseOrder.findUniqueOrThrow({ where: { id: b.poId }, select: { no: true } });
+    const po = await tx.purchaseOrder.findUniqueOrThrow({ where: { id: b.poId }, select: { no: true, indentId: true } });
+    const indent = await tx.indent.findUniqueOrThrow({ where: { id: po.indentId }, select: { department: true } });
+    const paymentAccount = await paymentLedgerLine(tx, b.branchId, body.mode === "NEFT" ? "BANK_TRANSFER" : body.mode);
     const expense = await tx.expense.create({
-      data: { organizationId: ctx.organizationId, branchId: b.branchId, date: body.paidOn, category: "Purchases", description: `${po.no} · bill ${b.billNo}${tds.amount ? ` (TDS ${tds.section} ₹${tds.amount} withheld)` : ""}`, amount: b.total, paidTo: vendor.name, method: body.mode === "NEFT" ? "BANK_TRANSFER" : body.mode, createdById: ctx.userId },
+      data: { organizationId: ctx.organizationId, branchId: b.branchId, date: body.paidOn, category: "Purchases", description: `${po.no} · bill ${b.billNo}${tds.amount ? ` (TDS ${tds.section} ₹${tds.amount} withheld)` : ""}`, amount: b.total, paidTo: vendor.name, method: body.mode === "NEFT" ? "BANK_TRANSFER" : body.mode, department: indent.department, createdById: ctx.userId },
     });
     const p = await tx.vendorPayment.create({
       data: { organizationId: ctx.organizationId, branchId: b.branchId, billId: id, vendorId: vendor.id, paidOn: body.paidOn, gross: b.total, tdsSection: tds.section, tds: tds.amount, net: round2(num(b.total) - tds.amount), mode: body.mode, reference: body.reference, expenseId: expense.id, paidById: ctx.userId },
     });
+    await postJournal(tx, ctx, {
+      branchId: b.branchId, date: body.paidOn, description: `Vendor bill ${b.billNo} · ${vendor.name}`,
+      sourceType: "VENDOR_PAYMENT", sourceId: p.id,
+      lines: [
+        { accountCode: "5050", description: `Vendor bill ${b.billNo}`, debit: num(b.total) },
+        { ...paymentAccount, description: `Paid ${body.mode}`, credit: num(p.net) },
+        ...(tds.amount > 0 ? [{ accountCode: "2100", description: `TDS ${tds.section}`, credit: tds.amount }] : []),
+      ],
+    });
     await tx.vendorBill.update({ where: { id }, data: { status: "PAID" } });
+    await audit(tx, ctx, { action: "UPDATE", entity: "VendorBill", entityId: id, branchId: b.branchId, before: { status: b.status }, after: { status: "PAID" } });
     await audit(tx, ctx, { action: "CREATE", entity: "VendorPayment", entityId: p.id, branchId: b.branchId, after: { bill: b.billNo, gross: num(b.total), tds: tds.amount } });
     return p;
   });
@@ -704,7 +868,9 @@ procurementRouter.post("/petty-cash/spend", async (req, res) => {
     if (body.amount > s.pettyCashVoucherLimit) throw badRequest(`Petty cash is for spends up to ₹${s.pettyCashVoucherLimit} — raise an indent for bigger purchases.`);
     if (body.amount > (await pettyBalance(tx, branchId))) throw conflict("Not enough cash in the petty cash box — top it up first.");
     const expense = await tx.expense.create({ data: { organizationId: ctx.organizationId, branchId, date: body.date, category: body.category, description: `Petty cash: ${body.purpose}`, amount: body.amount, paidTo: body.paidTo, method: "CASH", createdById: ctx.userId } });
-    return tx.pettyCashVoucher.create({ data: { organizationId: ctx.organizationId, branchId, voucherDate: body.date, kind: "SPEND", purpose: body.purpose, paidTo: body.paidTo, category: body.category, amount: body.amount, expenseId: expense.id, approvedById: ctx.userId } });
+    const voucher = await tx.pettyCashVoucher.create({ data: { organizationId: ctx.organizationId, branchId, voucherDate: body.date, kind: "SPEND", purpose: body.purpose, paidTo: body.paidTo, category: body.category, amount: body.amount, expenseId: expense.id, approvedById: ctx.userId } });
+    await audit(tx, ctx, { action: "CREATE", entity: "PettyCashVoucher", entityId: voucher.id, branchId, after: { kind: voucher.kind, category: voucher.category, amount: num(voucher.amount), expenseId: expense.id } });
+    return voucher;
   });
   res.status(201).json({ ...out, amount: num(out.amount) });
 });
@@ -716,7 +882,9 @@ procurementRouter.post("/petty-cash/top-up", async (req, res) => {
     const s = await settingsOf(tx, ctx.organizationId);
     const need = round2(s.pettyCashFloat - (await pettyBalance(tx, branchId)));
     if (need <= 0) throw conflict("The petty cash box is already full.");
-    return tx.pettyCashVoucher.create({ data: { organizationId: ctx.organizationId, branchId, voucherDate: todayDate(), kind: "TOPUP", purpose: "Top-up to float (cash withdrawn from bank)", paidTo: "Petty cash box", amount: need, approvedById: ctx.userId } });
+    const voucher = await tx.pettyCashVoucher.create({ data: { organizationId: ctx.organizationId, branchId, voucherDate: todayDate(), kind: "TOPUP", purpose: "Top-up to float (cash withdrawn from bank)", paidTo: "Petty cash box", amount: need, approvedById: ctx.userId } });
+    await audit(tx, ctx, { action: "CREATE", entity: "PettyCashVoucher", entityId: voucher.id, branchId, after: { kind: voucher.kind, amount: num(voucher.amount) } });
+    return voucher;
   });
   res.status(201).json({ ...out, amount: num(out.amount) });
 });
@@ -734,6 +902,7 @@ procurementRouter.put("/procurement/settings", async (req, res) => {
   const body = z.object({
     principalLimit: z.number().int().min(0), quotationThreshold: z.number().int().min(0), minQuotations: z.number().int().min(1).max(5),
     pettyCashFloat: z.number().int().min(0), pettyCashVoucherLimit: z.number().int().min(0),
+    financeApprovalThreshold: z.number().int().min(0),
   }).partial().parse(req.body);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { settings: true } });

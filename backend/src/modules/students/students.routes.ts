@@ -395,7 +395,10 @@ studentsRouter.post('/students', async (req, res) => {
       }
     }
 
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Student', entityId: student.id, branchId, after: { ...body, aadhaar: undefined, admissionNo, rollNo } });
+    await audit(tx, ctx, {
+      action: 'CREATE', entity: 'Student', entityId: student.id, branchId,
+      after: { status: student.status, enrolled: true, rollNo, guardianCount: body.guardians.length, loginCreated: body.createLogins },
+    });
     return { student: await loadStudent(tx, student.id), logins };
   });
 
@@ -437,7 +440,13 @@ studentsRouter.patch('/students/:id', async (req, res) => {
 
     await audit(tx, ctx, {
       action: 'UPDATE', entity: 'Student', entityId: id, branchId: before.branchId,
-      before: { ...before, sensitive: undefined }, after: { ...body, aadhaar: body.aadhaar ? 'changed' : undefined },
+      before: { status: before.status },
+      after: {
+        status: status ?? before.status,
+        sectionChanged: sectionId !== undefined,
+        rollNoChanged: rollNo !== undefined,
+        changedFields: Object.keys(rest),
+      },
     });
     return loadStudent(tx, id);
   });
@@ -454,7 +463,10 @@ studentsRouter.put('/students/:id/guardians', async (req, res) => {
     if (!s) throw notFound('Student');
     if (!ctx.access.can('students.write', s.branchId)) throw forbidden();
     await setGuardians(tx, ctx.organizationId, id, guardians);
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'StudentGuardian', entityId: id, branchId: s.branchId, after: guardians });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'StudentGuardian', entityId: id, branchId: s.branchId,
+      after: { guardianCount: guardians.length },
+    });
     return loadStudent(tx, id);
   });
   res.json(student);

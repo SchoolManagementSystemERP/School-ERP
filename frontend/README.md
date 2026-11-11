@@ -22,13 +22,28 @@ else `greenwood`); in production each school's site runs on its own subdomain.
 To open the app on a phone on the same Wi-Fi / hotspot, start it with `npx vite --host 0.0.0.0` and open
 `http://<computer's IPv4 address>:5173` (find the address with `ipconfig`).
 
+Signed-in portals include Jarvis for page navigation and current-page Q&A using the local Ollama model
+configured on the backend. Teachers with attendance permission can also prepare a complete class register
+by voice and save it after reviewing and confirming the preview. Other record-changing actions are not
+connected to Jarvis yet. Install and start Ollama on the API host as described in `backend/README.md`.
+Voice input uses a multilingual Whisper small model in the browser, with Hindi selected by default for
+Hindi/Hinglish speech; automatic detection and English are also available. Its model files download once
+and are cached by the browser; microphone audio is processed on-device and is not sent to a speech
+service or the ERP server. Raw microphone samples are captured directly in the browser and resampled for
+Whisper, avoiding dependence on recorded-media format decoding. Jarvis shows an editable transcript
+before processing a voice command.
+The first model download needs internet. Microphone access requires localhost or HTTPS (including on phones).
+While recording, use the live level meter; if it stays low, select the correct microphone from Jarvis's
+microphone list, speak, then press the mic button again to transcribe.
+Assistant chat still goes to the local Ollama model on the API host.
+
 ### Pages
 
 | URL | What it is |
 |---|---|
 | `/` | SchoolERP product website (features, roles, pricing, FAQ, demo booking) — plus `/privacy` and `/terms` |
 | `/school` | Sample school website: home, about, academics, admissions, facilities, student life, gallery, faculty, notices, CBSE disclosure, careers, alumni, contact |
-| `/login` | Sign in to the ERP portals |
+| `/login` · `/login/region` · `/login/head-office` | Sign in — school staff, students and parents · a region office · the head office (each account only on its own level's page) |
 
 The school website is connected to the ERP: admission enquiries go to Reception → Enquiries, job
 applications to HR → Recruitment, contact / grievance messages and alumni sign-ups to Admin → School

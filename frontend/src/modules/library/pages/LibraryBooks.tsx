@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,10 +18,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Search, Plus, Edit, Trash2, BookOpen } from "lucide-react";
+import { Search, Plus, Edit, Trash2, BookOpen, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { errorMessage } from "@/api/client";
 import { BOOK_CATEGORIES } from "@/data/library";
-import { availableCopies, bookStore, copiesOut, removeBook, useBooks, useLoans } from "@/store/library";
+import { availableCopies, bookStore, copiesOut, removeBook, uploadBookPdf, useBooks, useLoans } from "@/store/library";
 
 const emptyBook = { title: "", author: "", isbn: "", category: "", publisher: "", edition: "", publishYear: "", totalCopies: "", rack: "" };
 
@@ -34,6 +35,9 @@ export function LibraryBooks() {
   // null = adding a new book, otherwise the id being edited
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyBook);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTargetId, setUploadTargetId] = useState<number | null>(null);
+  const [uploadingBookId, setUploadingBookId] = useState<number | null>(null);
 
   const categories = [
     { value: "all", label: "All Categories" },
@@ -99,6 +103,31 @@ export function LibraryBooks() {
     else toast.success("Book deleted successfully!");
   };
 
+  const handlePdfSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const bookId = uploadTargetId;
+    event.target.value = "";
+    if (!file || bookId === null) return;
+    if (!file.name.toLowerCase().endsWith(".pdf")) {
+      toast.error("Choose a PDF file");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("PDF files must be 20 MB or smaller");
+      return;
+    }
+    setUploadingBookId(bookId);
+    try {
+      await uploadBookPdf(bookId, file);
+      toast.success("Digital book PDF uploaded");
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setUploadingBookId(null);
+      setUploadTargetId(null);
+    }
+  };
+
   const getAvailabilityBadge = (available: number, total: number) => {
     const percentage = (available / total) * 100;
     if (percentage === 0) {
@@ -111,6 +140,7 @@ export function LibraryBooks() {
 
   return (
     <div className="space-y-6">
+      <input ref={pdfInputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={handlePdfSelection} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-foreground">Library Books Catalog</h1>
@@ -281,6 +311,32 @@ export function LibraryBooks() {
                     {book.availableCopies} / {book.totalCopies}
                   </p>
                 </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">Digital PDF</p>
+                  {book.pdfFileName ? (
+                    <p className="truncate text-xs text-muted-foreground">
+                      {book.pdfFileName} · {((book.pdfSizeBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Not uploaded — students stay locked until issued</p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={uploadingBookId === book.id}
+                  className="gap-2"
+                  onClick={() => {
+                    setUploadTargetId(book.id);
+                    pdfInputRef.current?.click();
+                  }}
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploadingBookId === book.id ? "Uploading…" : book.pdfFileName ? "Replace PDF" : "Upload PDF"}
+                </Button>
               </div>
             </CardContent>
           </Card>

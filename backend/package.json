@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:db": "tsx scripts/test-db.ts",
     "test:procurement": "tsx scripts/test-procurement.ts",
+    "test:ledger": "tsx scripts/test-ledger.ts",
     "prisma:generate": "prisma generate",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "import:frontend": "tsx scripts/import-frontend-demo.ts",

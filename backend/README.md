@@ -4,7 +4,8 @@ REST API for the School ERP: **Node.js (20.19+ / 22.12+ / 24) + Express 5 + Type
 **Microsoft SQL Server**.
 
 It covers sign-in, organization / branches / academic years, classes, users and roles, students, staff,
-academics (timetable, attendance, exams & marks, assignments, notes), fees and expenses, leave and payroll,
+academics (timetable, attendance, exams & marks, assignments, notes), fees, expenses, a branch-scoped general ledger,
+double-entry manual journal vouchers and financial statements, leave and payroll,
 notices and messages, the school website (public pages and forms), front office, library, inventory and
 stock analysis, transport, hostel, purchasing (PR → PO → GRN → bill → payment) and the HR suite (staff
 attendance, recruitment and offers, onboarding, compensation, statutory payroll, expense claims, training,
@@ -14,20 +15,20 @@ exits with full & final). The frontend uses this API for all of its data.
 backend/
 ├── DESIGN.md                        full design: tenancy, roles, tables, APIs, security, phases
 ├── package.json · tsconfig.json · prisma.config.ts · .env.example
-├── prisma/schema.prisma             data model (92 tables) — source of truth
+├── prisma/schema.prisma             data model (95 tables) — source of truth
 ├── database/
 │   ├── schema.sql                   SQL Server DDL generated from schema.prisma
 │   ├── filtered-unique-indexes.sql  "unique when set" columns (Prisma cannot express these)
 │   ├── row-level-security.sql       keeps each organization's data separate
 │   ├── seed.sql                     plans, permissions, 20 built-in roles, demo DAV org with 3 branches
-│   └── migrations/                  changes for databases created earlier (002–012, applied by migrate.ps1)
+│   └── migrations/                  changes for databases created earlier (002–025, applied by migrate.ps1)
 ├── scripts/seed-demo.ts             demo users, teachers, students, parents (+ a 2nd org, Greenfield)
 ├── scripts/import-frontend-demo.ts  builds a 3rd org, Greenwood, from scripts/demo-data/greenwood.json (dates moved to today)
 ├── scripts/seed-procurement-demo.ts purchasing demo for Greenwood, created through the API
 ├── scripts/seed-hr-demo.ts          trainings (slides + test) and an expense claim for Greenwood
 ├── scripts/test-*.ts                API and database tests (see "Checking the database")
 └── src/
-    ├── server.ts · app.ts           start-up, middleware, route mounting
+    ├── server.ts · app.ts           start-up, activity/auth middleware, route mounting
     ├── config/env.ts                validated environment variables
     ├── db/prisma.ts                 withTenant / withSystem — sets the row-level security context
     ├── auth/                        tokens (JWT + refresh), access (who can do what in which branch)
@@ -55,12 +56,45 @@ Put that password in `DATABASE_URL` in `.env`.
 **Existing database:** `powershell -ExecutionPolicy Bypass -File database/migrate.ps1` applies any new
 `database/migrations/*.sql` (tracked in `dbo.SchemaMigration`) and re-applies constraints and procedures.
 
+The Accounts portal includes a branch-level chart of accounts, balanced and immutable manual journals,
+trial balance, income & expenditure, and balance sheet views. New fee receipts/refunds, expenses, vendor
+payments, payroll disbursements, grant transactions and positive bank-account opening balances post
+source-linked journals. Historical transactions and opening balances are not backfilled, so verify and
+reconcile balances before relying on these statements for official reporting.
+
+The Finance Operations screen supports masked bank-account records, duplicate-safe CSV statement imports,
+suggested and permission-checked journal matching, financial-year departmental budgets with procurement
+commitment checks/hard stops, and restricted grant receipts/spending with utilization CSV exports. Bank
+CSV imports accept a header row with date, description and direction/amount or debit/credit columns, up to
+500 transactions per file. Statement matching suggests equal-value entries within three days. Automatic
+bank postings use the branch's first active account of the matching type (Operating, Hostel, Trust or
+Grant); other bank types and MT940 files still need manual reconciliation.
+
+The immutable Audit Log is available in portals to roles granted `audit.read`. It records audited
+business changes plus successful authenticated API reads and actions across modules, and supports
+action, record type and date filters, branch-aware access, and paginated before/after details. Apply
+`022-audit-log-access.sql` and `023-audit-read-actions.sql` to an existing database for built-in
+management, finance and audit roles and the additional READ/ACTION event types.
+
+If an Accountant sees a permission error on ledger setup, run the existing-database migration command
+above to apply `015-accounting-manager-permissions.sql`. It idempotently grants `accounting.manage` to
+the built-in Accountant and Finance Head roles; custom roles must be granted that permission by an
+organization administrator.
+
+Fee heads can be itemized into named components (for example tuition: academic, development and activities;
+hostel: accommodation and mess), with component totals validated against the annual fee and the full fee
+split across configurable dated installments. Late-fee rules and concessions are configurable. Refunds are currently one
+full refund per successful payment; transfer/exit settlement and partial refunds are not automatic.
+TDS/GST/80G filings, multi-year closing/opening workflows, payroll bank-file exports, direct grant UC PDF,
+and accounting-software exports remain outside this phase. Existing statutory payroll calculations and
+procurement PO/GRN/vendor-bill matching continue to use their existing modules.
+
 | File | What it holds |
 |---|---|
 | `schema.sql` | tables, generated from `prisma/schema.prisma` |
-| `filtered-unique-indexes.sql` | "unique when set" login columns |
-| `row-level-security.sql` | organization isolation for 86 tenant tables |
-| `constraints.sql` | 222 foreign keys, 123 checks (allowed values, amounts, dates), 144 indexes — generated by `node scripts/gen-constraints.mjs` |
+| `filtered-unique-indexes.sql` | "unique when set" login and bank-reconciliation columns |
+| `row-level-security.sql` | organization isolation for tenant-owned tables, including the ledger |
+| `constraints.sql` | 244 foreign keys, 131 checks (allowed values, amounts, dates), 160 indexes — generated by `node scripts/gen-constraints.mjs` |
 | `procedures.sql` | `usp_Maintenance`, `usp_StudentDataExport` and `usp_StudentAnonymize` (DPDP requests) |
 | `security/app-login.sql` | the least-privilege `erp_app` login |
 | `maintenance/` | backups and the weekly clean-up (below) |
@@ -88,6 +122,7 @@ check who may do what, and remove the data they create:
 |---|---|
 | `npm run test:academics` | timetable, attendance, exams & marks (results only after publishing), assignments, notes — 49 |
 | `npm run test:finance` | fee structure, concessions, payments (late fee, receipts, idempotency), expenses, leave, payroll — 42 |
+| `npm run test:ledger` | chart and finance-operations permissions, balanced journal vouchers, trial-balance integrity and balance-sheet arithmetic (migrations 013–014) |
 | `npm run test:communication` | notices by audience, public notices, messages between students, parents and teachers — 30 |
 | `npm run test:website` | public pages and forms, enquiries, visitors, careers, website profile — 35 |
 | `npm run test:facilities` | library (fines), inventory (stock), transport (drivers, stops), hostel (rooms, outpasses) — 37 |
@@ -121,6 +156,23 @@ the running server locks Prisma's files), then `powershell -ExecutionPolicy Bypa
 to apply new migrations (e.g. `010-hr-suite.sql` for the HR tables).
 
 Use a dedicated SQL login for the API rather than `sa`, with access to `school_erp` only.
+
+### Local AI assistant
+
+The assistant uses a self-hosted Ollama model; it does not call OpenAI, Gemini, or another hosted AI API.
+Install Ollama on the same machine as the API, then download the configured model:
+
+```powershell
+ollama pull qwen2.5:7b
+```
+
+`OLLAMA_BASE_URL` defaults to `http://127.0.0.1:11434` and is restricted to loopback addresses.
+`OLLAMA_MODEL` defaults to `qwen2.5:7b`. The assistant sends the signed-in user's current visible page text
+to this local model for read-only Q&A; page text is not stored in the assistant API audit record. Actions
+are not performed by the model. Voice transcription runs in the browser with a locally cached Whisper model;
+microphone audio is not sent to this API. Spoken replies use the device's speech synthesis voices.
+Inference is configured for CPU to avoid instability on low-VRAM
+GPUs; on a 7B model, replies may take a little while. Keep the API host running while using the assistant.
 
 `DEMO_PAYMENTS=true` lets students and parents "pay" fees online without a payment gateway — for demos only;
 the API refuses to start with it in production. Real online payments must come from the gateway's webhook.
@@ -174,7 +226,9 @@ in one branch. Errors are always `{ code, message, details? }`.
 | Communication | `GET/POST /announcements` · `DELETE /announcements/:id` · `GET/POST /messages` (`?scope=school` for principals) · `POST /messages/:id/read` |
 | Website & front office | `GET/PUT /website` · `GET /website/messages` · `PATCH /website/messages/:id` · `GET /website/alumni` · `GET/POST /jobs` · `PATCH /jobs/:id` · `GET /job-applications` · `PATCH /job-applications/:id` · `GET/POST /enquiries` · `PATCH /enquiries/:id` · `GET/POST /visitors` · `POST /visitors/:id/checkout` |
 | Public (no sign-in) | `GET /public/:school/{site,announcements,exams,fees,faculty,jobs}` · `POST /public/:school/{enquiries,applications,contact,alumni}` · `POST /public/demo-requests` (forms are rate-limited) |
-| Facilities | `GET /library` · `POST /library/books` · `PATCH/DELETE /library/books/:id` · `POST /library/loans` · `POST /library/loans/:id/return` · `GET/POST /inventory/items` · `PATCH/DELETE /inventory/items/:id` · `POST /inventory/items/:id/movements` · `GET /inventory/movements` · `GET /inventory/analysis?months=` · `GET/PUT /inventory/settings` · `GET /transport` · `POST/PATCH/DELETE /transport/{vehicles,routes}` · `GET /hostel` · `POST /hostel/allocations` · `POST /hostel/residents/:studentId/vacate` · `POST /hostel/outpasses` · `PATCH /hostel/outpasses/:id` |
+| Facilities | `GET /library` · `POST /library/books` · `PATCH/DELETE /library/books/:id` · `PUT /library/books/:id/pdf` · `GET /library/digital-books?studentId=` · `GET /library/digital-books/:id/pdf?studentId=` · `POST /library/loans` · `POST /library/loans/:id/return` · `POST /library/digital-loans` · `POST /library/digital-loans/:id/return` · `GET/POST /inventory/items` · `PATCH/DELETE /inventory/items/:id` · `POST /inventory/items/:id/movements` · `GET /inventory/movements` · `GET /inventory/analysis?months=` · `GET/PUT /inventory/settings` · `GET /transport` · `POST/PATCH/DELETE /transport/{vehicles,routes}` · `GET /hostel` · `POST /hostel/allocations` · `POST /hostel/residents/:studentId/vacate` · `POST /hostel/outpasses` · `PATCH /hostel/outpasses/:id` |
+
+Library PDFs are uploaded as `application/pdf` binary requests (maximum 20 MB) and stored with the book record. Digital PDF access is issued and returned separately from hard copies, so digital issues do not consume physical stock. Student/guardian catalogue and reader requests are scoped to a linked student; the PDF endpoint additionally requires an active digital issue. Returning a digital issue revokes reader access.
 | Procurement | `GET/POST /procurement/indents` · `POST /procurement/indents/:id/{hod,store-check,principal,management,cancel,issue}` · `GET/POST /procurement/indents/:id/quotations` · `GET /procurement/quotations` · `DELETE /procurement/quotations/:id` · `POST /procurement/indents/:id/purchase-order` · `GET /procurement/purchase-orders` · `POST /procurement/purchase-orders/:id/{receipts,cancel}` · `GET /procurement/receipts` · `GET/POST/PUT /procurement/vendors` · `GET/PUT /procurement/settings` |
 | Payables | `GET/POST /payables/bills` · `POST /payables/bills/:id/{decision,pay}` · `GET /payables/payments` · `GET /petty-cash` · `POST /petty-cash/{spend,top-up}` |
 | Group office | `GET /group/overview` (schools in scope side by side, group and region totals; needs `group.view`) |

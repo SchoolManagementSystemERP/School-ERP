@@ -48,7 +48,7 @@ recruitmentRouter.post('/job-applications', async (req, res) => {
         experienceYears: body.experienceYears, currentEmployer: body.currentEmployer ?? null, expectedSalary: body.expectedSalary ?? null, source: body.source, notes: body.notes ?? null,
       },
     });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'JobApplication', entityId: a.id, branchId, after: { name: body.name, source: body.source } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'JobApplication', entityId: a.id, branchId, after: { jobOpeningId: body.jobId ?? null, source: body.source } });
     return { id: a.id };
   });
   res.status(201).json(out);
@@ -93,7 +93,8 @@ recruitmentRouter.post('/job-applications/:id/interviews', async (req, res) => {
     const scheduledAt = new Date(body.scheduledAt);
     const r = await tx.interviewRound.create({ data: { organizationId: ctx.organizationId, applicationId: id, roundNo: (last?.roundNo ?? 0) + 1, title: body.title, mode: body.mode, scheduledAt, interviewer: body.interviewer } });
     await tx.jobApplication.update({ where: { id }, data: { status: 'INTERVIEW', interviewDate: new Date(`${scheduledAt.toISOString().slice(0, 10)}T00:00:00Z`) } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'InterviewRound', entityId: r.id, branchId: a.branchId, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'JobApplication', entityId: id, branchId: a.branchId, before: { status: a.status }, after: { status: 'INTERVIEW' } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'InterviewRound', entityId: r.id, branchId: a.branchId, after: { roundNo: r.roundNo, title: r.title, mode: r.mode, scheduledAt: r.scheduledAt.toISOString() } });
     return roundOut(r);
   });
   res.status(201).json(out);
@@ -110,8 +111,11 @@ recruitmentRouter.patch('/interviews/:id', async (req, res) => {
     const a = await applicationOrThrow(tx, r.applicationId);
     assertHr(ctx, a.branchId);
     const updated = await tx.interviewRound.update({ where: { id }, data: body });
-    if (body.result === 'FAIL') await tx.jobApplication.update({ where: { id: a.id }, data: { status: 'REJECTED' } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'InterviewRound', entityId: id, branchId: a.branchId, after: body });
+    if (body.result === 'FAIL') {
+      await tx.jobApplication.update({ where: { id: a.id }, data: { status: 'REJECTED' } });
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'JobApplication', entityId: a.id, branchId: a.branchId, before: { status: a.status }, after: { status: 'REJECTED' } });
+    }
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'InterviewRound', entityId: id, branchId: a.branchId, after: { result: body.result, rating: body.rating, feedbackProvided: !!body.feedback } });
     return roundOut(updated);
   });
   res.json(out);
@@ -167,7 +171,7 @@ recruitmentRouter.post('/job-applications/:id/offer', async (req, res) => {
         breakdown: JSON.stringify(breakdown), createdById: ctx.userId,
       },
     });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'JobOffer', entityId: o.id, branchId: a.branchId, after: { letterNo, ctcAnnual: breakdown.ctcAnnual } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'JobOffer', entityId: o.id, branchId: a.branchId, after: { letterNo, compensationSet: true } });
     return offerOut(o, a);
   });
   res.status(201).json(out);
@@ -187,7 +191,11 @@ recruitmentRouter.patch('/offers/:id', async (req, res) => {
     if (o.staffId) throw conflict('The candidate has already joined.');
     if (body.status === 'ACCEPTED' && o.validTill < todayUtc()) throw conflict('The offer has expired — make a new one.');
     const updated = await tx.jobOffer.update({ where: { id }, data: { status: body.status, ...(body.status === 'ACCEPTED' || body.status === 'DECLINED' ? { respondedAt: new Date() } : {}) } });
-    if (body.status === 'ACCEPTED') await tx.jobApplication.update({ where: { id: o.applicationId }, data: { status: 'SELECTED' } });
+    if (body.status === 'ACCEPTED') {
+      const application = await tx.jobApplication.findUniqueOrThrow({ where: { id: o.applicationId }, select: { status: true } });
+      await tx.jobApplication.update({ where: { id: o.applicationId }, data: { status: 'SELECTED' } });
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'JobApplication', entityId: o.applicationId, branchId: o.branchId, before: { status: application.status }, after: { status: 'SELECTED' } });
+    }
     await audit(tx, ctx, { action: 'UPDATE', entity: 'JobOffer', entityId: id, branchId: o.branchId, before: { status: o.status }, after: body });
     return offerOut(updated);
   });
@@ -228,6 +236,7 @@ recruitmentRouter.post('/offers/:id/join', async (req, res) => {
     await tx.jobOffer.update({ where: { id }, data: { staffId: staff.id } });
     await createOnboardingTasks(tx, ctx, staff.id, o.staffType, ['offer_signed', 'employee_code', 'payroll', ...(login ? ['login'] : [])]);
     await audit(tx, ctx, { action: 'CREATE', entity: 'Staff', entityId: staff.id, branchId: o.branchId, after: { employeeCode, from: o.letterNo, login: !!login } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'JobOffer', entityId: o.id, branchId: o.branchId, before: { status: o.status, staffId: o.staffId }, after: { status: o.status, staffId: staff.id, joined: true } });
     return { staffId: staff.id, employeeCode, temporaryPassword: login?.temporaryPassword ?? null };
   });
   res.status(201).json(out);

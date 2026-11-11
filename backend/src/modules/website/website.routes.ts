@@ -38,8 +38,9 @@ websiteRouter.put('/website', async (req, res) => {
   await withTenant(ctx.organizationId, async (tx) => {
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { settings: true } });
     const settings = (parseJson(org.settings) ?? {}) as Record<string, unknown>;
+    const previousWebsite = (settings.website ?? null) as { name?: unknown } | null;
     await tx.organization.update({ where: { id: ctx.organizationId }, data: { settings: JSON.stringify({ ...settings, website: site }) } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Website', entityId: ctx.organizationId, after: { name: site.name } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Website', entityId: ctx.organizationId, before: { name: typeof previousWebsite?.name === 'string' ? previousWebsite.name : null }, after: { name: site.name } });
   });
   res.json(site);
 });
@@ -61,8 +62,12 @@ websiteRouter.patch('/website/messages/:id', async (req, res) => {
   const id = idParam(req);
   const body = z.object({ resolved: z.boolean() }).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
-    if (!(await tx.contactMessage.count({ where: { id } }))) throw notFound('Message');
+    const before = await tx.contactMessage.findUnique({ where: { id }, select: { resolved: true } });
+    if (!before) throw notFound('Message');
     await tx.contactMessage.update({ where: { id }, data: body });
+    if (before.resolved !== body.resolved) {
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'ContactMessage', entityId: id, before: { resolved: before.resolved }, after: { resolved: body.resolved } });
+    }
   });
   res.json({ ok: true });
 });
@@ -129,7 +134,7 @@ websiteRouter.patch('/jobs/:id', async (req, res) => {
     if (!ctx.access.can('staff.write', before.branchId)) throw forbidden();
     const { responsibilities, ...cols } = body;
     const j = await tx.jobOpening.update({ where: { id }, data: { ...cols, ...(responsibilities ? { responsibilities: JSON.stringify(responsibilities) } : {}) } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'JobOpening', entityId: id, branchId: before.branchId, before: { title: before.title, isOpen: before.isOpen }, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'JobOpening', entityId: id, branchId: before.branchId, before: { title: before.title, isOpen: before.isOpen }, after: { title: j.title, isOpen: j.isOpen } });
     return jobOut(j);
   });
   res.json(out);
@@ -167,7 +172,16 @@ websiteRouter.patch('/job-applications/:id', async (req, res) => {
     if (!ctx.access.can('staff.write', a.branchId)) throw forbidden();
     if (body.status === 'INTERVIEW' && !(body.interviewDate ?? a.interviewDate)) throw badRequest('Set the interview date.');
     await tx.jobApplication.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'JobApplication', entityId: id, branchId: a.branchId, before: { status: a.status }, after: { ...body, interviewDate: toDateString(body.interviewDate ?? null) } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'JobApplication', entityId: id, branchId: a.branchId,
+      before: { status: a.status },
+      after: {
+        status: body.status ?? a.status,
+        interviewDateUpdated: body.interviewDate !== undefined,
+        screeningScoreUpdated: body.screeningScore !== undefined,
+        notesUpdated: body.notes !== undefined, screeningNotesUpdated: body.screeningNotes !== undefined,
+      },
+    });
   });
   res.json({ ok: true });
 });

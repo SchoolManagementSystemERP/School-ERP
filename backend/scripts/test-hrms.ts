@@ -169,6 +169,8 @@ async function main() {
   ok(qs.status === 200 && qs.body.questions === 2, "question bank saved");
   ok((await call(hr, "PUT", `/trainings/${trId}/questions`, { questions: [{ question: "x?", options: ["a", "b"], answerIndex: 5 }] })).status === 400, "the correct answer must be one of the options");
   ok((await call(hr, "POST", `/trainings/${trId}/enroll`, { staffIds: [newStaffId, priyaId] })).body.added === 1, "participants enrolled (the trainer is not enrolled as a participant)");
+  ok((await call(hr, "POST", `/trainings/${trId}/attendance`, { entries: [{ staffId: "00000000-0000-4000-8000-000000000001", attended: true }] })).status === 400, "attendance cannot be recorded for a non-participant");
+  ok((await call(hr, "POST", `/trainings/${trId}/attendance`, { entries: [{ staffId: newStaffId, attended: true }] })).status === 200, "HR records enrolled participants' training attendance");
   const newTeacher = await login(joined.body.employeeCode, joined.body.temporaryPassword).catch(() => null);
   if (newTeacher) {
     // the new teacher must change the password before using the API
@@ -189,6 +191,11 @@ async function main() {
   const mis = await call(hr, "GET", "/trainings-mis");
   const row = (mis.body.perTraining as { id: string; avgPre: number; avgPost: number; improvement: number; passed: number }[]).find((x) => x.id === trId);
   ok(!!row && row.avgPre === 0 && row.avgPost === 100 && row.improvement === 100 && row.passed === 1, "MIS: pre / post averages, improvement and passes", row);
+  const auditTrail = await call(hr, "GET", "/audit-log?entity=Training&pageSize=100");
+  const trainingEvents = new Set((auditTrail.body?.events ?? []).map((event: { entity: string }) => event.entity));
+  ok(auditTrail.status === 200 && ["Training", "TrainingQuestions", "TrainingEnrollment", "TrainingAttendance"].every((entity) => trainingEvents.has(entity)), "HR audit log records training setup, participation and attendance", [...trainingEvents]);
+  ok((auditTrail.body?.events ?? []).some((event: { action: string; entity: string }) => event.action === "READ" && event.entity.includes("/trainings/")), "successful training reads are recorded as activity");
+  ok((await call(teacher, "GET", "/audit-log")).status === 403, "staff without HR or audit permission cannot read the audit log");
 
   console.log("Exit & full and final");
   const sep = await call(teacher, "POST", "/separations", { reason: `${TAG} relocating`, letter: "Dear Sir/Madam, I resign from my post…" });

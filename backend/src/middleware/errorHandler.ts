@@ -5,6 +5,10 @@ import { AppError } from '../lib/errors.js';
 
 /** Every error leaves the API as `{ code, message, details? }`. */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  if (err instanceof Error && 'status' in err && err.status === 413) {
+    res.status(413).json({ code: 'PAYLOAD_TOO_LARGE', message: 'The uploaded file exceeds the 20 MB limit.' });
+    return;
+  }
   if (err instanceof AppError) {
     res.status(err.status).json({ code: err.code, message: err.message, details: err.details });
     return;

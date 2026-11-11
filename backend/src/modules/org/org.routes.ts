@@ -85,7 +85,7 @@ orgRouter.put('/org', requireOrg('org.manage'), async (req, res) => {
       data: { ...body, settings: body.settings === undefined ? undefined : JSON.stringify(body.settings) },
       select: { id: true, name: true, contactEmail: true, contactPhone: true, logoUrl: true, settings: true },
     });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Organization', entityId: ctx.organizationId, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Organization', entityId: ctx.organizationId, after: { changedFields: Object.keys(body) } });
     return updated;
   });
   res.json({ ...org, settings: parseJson(org.settings) });
@@ -145,7 +145,7 @@ orgRouter.post('/branches', requireOrg('org.manage'), async (req, res) => {
   const branch = await withTenant(ctx.organizationId, async (tx) => {
     if (body.regionId && !(await tx.region.findUnique({ where: { id: body.regionId } }))) throw badRequest('Unknown region.');
     const created = await tx.branch.create({ data: { ...body, organizationId: ctx.organizationId }, select: branchSelect });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Branch', entityId: created.id, branchId: created.id, after: body });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Branch', entityId: created.id, branchId: created.id, after: { changedFields: Object.keys(body) } });
     return created;
   });
   res.status(201).json(branch);
@@ -161,7 +161,7 @@ orgRouter.patch('/branches/:id', requireOrg('org.manage'), async (req, res) => {
     if (!before) throw notFound('Branch');
     if (body.regionId && !(await tx.region.findUnique({ where: { id: body.regionId } }))) throw badRequest('Unknown region.');
     const updated = await tx.branch.update({ where: { id }, data: body, select: branchSelect });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Branch', entityId: id, branchId: id, before, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Branch', entityId: id, branchId: id, after: { changedFields: Object.keys(body) } });
     return updated;
   });
   res.json(branch);

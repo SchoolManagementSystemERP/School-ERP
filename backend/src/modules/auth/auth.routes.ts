@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { hashRefreshToken, newRefreshToken, signAccessToken, ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_DAYS } from '../../auth/tokens.js';
 import { env } from '../../config/env.js';
 import { withSystem, withTenant, type Tx } from '../../db/prisma.js';
+import { audit } from '../../lib/audit.js';
 import { AppError, unauthorized } from '../../lib/errors.js';
 import { clientIp } from '../../lib/http.js';
 import { authenticate, ctxOf } from '../../middleware/authenticate.js';
@@ -112,6 +113,17 @@ authRouter.post('/refresh', async (req, res) => {
     }
     if (stored.expiresAt < new Date() || !stored.user.isActive) return null;
     await tx.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+    await tx.auditLog.create({
+      data: {
+        organizationId: stored.user.organizationId,
+        userId: stored.userId,
+        action: 'UPDATE',
+        entity: 'RefreshToken',
+        entityId: stored.id,
+        after: JSON.stringify({ rotated: true }),
+        ip: clientIp(req),
+      },
+    });
     return issueTokens(res, req, stored.userId, stored.user.organizationId, tx);
   });
 
@@ -126,7 +138,25 @@ authRouter.post('/refresh', async (req, res) => {
 authRouter.post('/logout', async (req, res) => {
   const token: unknown = req.cookies?.[REFRESH_COOKIE];
   if (typeof token === 'string' && token) {
-    await withSystem((tx) => tx.refreshToken.updateMany({ where: { tokenHash: hashRefreshToken(token), revokedAt: null }, data: { revokedAt: new Date() } }));
+    await withSystem(async (tx) => {
+      const stored = await tx.refreshToken.findFirst({
+        where: { tokenHash: hashRefreshToken(token), revokedAt: null },
+        select: { id: true, userId: true, user: { select: { organizationId: true } } },
+      });
+      if (!stored) return;
+      await tx.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      await tx.auditLog.create({
+        data: {
+          organizationId: stored.user.organizationId,
+          userId: stored.userId,
+          action: 'UPDATE',
+          entity: 'RefreshToken',
+          entityId: stored.id,
+          after: JSON.stringify({ revoked: true, reason: 'logout' }),
+          ip: clientIp(req),
+        },
+      });
+    });
   }
   res.clearCookie(REFRESH_COOKIE, { ...cookieOptions, maxAge: undefined });
   res.status(204).end();
@@ -148,6 +178,7 @@ authRouter.post('/change-password', authenticate, async (req, res) => {
       data: { passwordHash: await bcrypt.hash(body.newPassword, PASSWORD_ROUNDS), mustChangePassword: false },
     });
     await tx.refreshToken.updateMany({ where: { userId: ctx.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'User', entityId: ctx.userId, after: { passwordChanged: true } });
     return issueTokens(res, req, ctx.userId, ctx.organizationId, tx);
   });
   res.json(result);

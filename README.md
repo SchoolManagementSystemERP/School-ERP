@@ -67,7 +67,10 @@ TDS in payroll, GST and TDS on vendor bills, and DPDP data-protection requests.
 
 ## 3. User roles and portals
 
-Sign in at `/login` with the school code, a username and a password. Demo logins for every role are in
+There are three sign-in pages, one per level, with tabs to move between them: **School** (`/login` — principal,
+teachers, office staff, students, parents), **Region Office** (`/login/region`) and **Head Office**
+(`/login/head-office` — trust and management). An account can only sign in on its own level's page; on the wrong
+one it is told which page to use. Sign in with the school code, a username and a password. Demo logins for every role are in
 [frontend/README.md](frontend/README.md#demo-logins) (school code `greenwood`, password `Demo@1234`).
 
 | Role | Portal | Main work |

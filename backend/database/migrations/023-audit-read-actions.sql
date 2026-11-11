@@ -1,0 +1,7 @@
+IF OBJECT_ID(N'dbo.CK_AuditLog_action', N'C') IS NOT NULL
+  ALTER TABLE dbo.AuditLog DROP CONSTRAINT CK_AuditLog_action;
+
+ALTER TABLE dbo.AuditLog WITH CHECK
+  ADD CONSTRAINT CK_AuditLog_action
+  CHECK ([action] IN (N'CREATE', N'UPDATE', N'DELETE', N'LOGIN', N'EXPORT', N'READ', N'ACTION'));
+GO

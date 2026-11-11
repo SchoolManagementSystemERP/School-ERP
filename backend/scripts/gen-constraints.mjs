@@ -110,6 +110,7 @@ const RANGE = [
   ["FeeInstallment", "percent", "[percent] > 0 AND [percent] <= 100"],
   ["FeeConcession", "percent", "[percent] > 0 AND [percent] <= 100"],
   ["FeePayment", "amount", "[amount] > 0 AND [lateFee] >= 0"],
+  ["JournalLine", "amounts", "([debit] > 0 AND [credit] = 0) OR ([credit] > 0 AND [debit] = 0)"],
   ["Expense", "amount", "[amount] > 0"],
   ["Payslip", "amounts", "[gross] >= 0 AND [deductions] >= 0 AND [net] = [gross] - [deductions]"],
   ["Staff", "salary", "[basicSalary] IS NULL OR [basicSalary] >= 0"],

@@ -5,9 +5,14 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { prisma } from './db/prisma.js';
 import { authenticate } from './middleware/authenticate.js';
+import { activityAudit } from './middleware/activityAudit.js';
+import { auditRouter } from './modules/audit/audit.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { academicsRouter } from './modules/academics/academics.routes.js';
 import { financeRouter } from './modules/finance/finance.routes.js';
+import { ledgerRouter } from './modules/finance/ledger.routes.js';
+import { bankingRouter } from './modules/finance/banking.routes.js';
+import { controlsRouter } from './modules/finance/controls.routes.js';
 import { hrRouter } from './modules/hr/hr.routes.js';
 import { communicationRouter } from './modules/communication/communication.routes.js';
 import { publicRouter } from './modules/public/public.routes.js';
@@ -26,6 +31,7 @@ import { procurementRouter } from './modules/procurement/procurement.routes.js';
 import { staffRouter } from './modules/staff/staff.routes.js';
 import { studentsRouter } from './modules/students/students.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
+import { assistantRouter } from './modules/assistant/assistant.routes.js';
 
 export function createApp() {
   const app = express();
@@ -49,6 +55,9 @@ export function createApp() {
 
   // Everything below needs a signed-in user
   api.use(authenticate);
+  api.use(auditRouter);
+  api.use(activityAudit);
+  api.use(assistantRouter);
   api.use(orgRouter);
   api.use(classesRouter);
   api.use(studentsRouter);
@@ -57,6 +66,9 @@ export function createApp() {
   api.use(staffRouter);
   api.use(academicsRouter);
   api.use(financeRouter);
+  api.use(ledgerRouter);
+  api.use(bankingRouter);
+  api.use(controlsRouter);
   api.use(hrRouter);
   api.use(communicationRouter);
   api.use(websiteRouter);

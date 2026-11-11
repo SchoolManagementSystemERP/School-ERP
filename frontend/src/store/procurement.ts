@@ -198,7 +198,7 @@ export interface GoodsReceipt {
   lines: GRNLine[];
 }
 
-export type BillStatus = "MATCHED" | "MISMATCH" | "APPROVED" | "PAID" | "ON_HOLD";
+export type BillStatus = "MATCHED" | "MISMATCH" | "FIN_REVIEW" | "APPROVED" | "PAID" | "ON_HOLD";
 
 export interface VendorBill {
   id: number;
@@ -272,6 +272,8 @@ export interface ProcurementSettings {
   /** Petty cash float and the most one voucher may spend. */
   pettyCashFloat: number;
   pettyCashVoucherLimit: number;
+  /** Bills at or above this amount require Finance Manager approval before payment. */
+  financeApprovalThreshold: number;
 }
 
 // ── From the API ──────────────────────────────────────────────────────────────
@@ -282,6 +284,7 @@ const DEFAULT_SETTINGS: ProcurementSettings = {
   minQuotations: 3,
   pettyCashFloat: 10000,
   pettyCashVoucherLimit: 2000,
+  financeApprovalThreshold: 50000,
 };
 
 interface ApiIndent {

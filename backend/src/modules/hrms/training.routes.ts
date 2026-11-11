@@ -167,6 +167,7 @@ trainingRouter.post('/trainings/:id/enroll', async (req, res) => {
     const already = new Set((await tx.trainingEnrollment.findMany({ where: { trainingId: id }, select: { staffId: true } })).map((e) => e.staffId));
     const fresh = body.staffIds.filter((s) => !already.has(s) && s !== t.trainerStaffId);
     if (fresh.length) await tx.trainingEnrollment.createMany({ data: fresh.map((staffId) => ({ organizationId: ctx.organizationId, trainingId: id, staffId })) });
+    if (fresh.length) await audit(tx, ctx, { action: 'CREATE', entity: 'TrainingEnrollment', entityId: id, branchId: t.branchId, after: { added: fresh.length } });
     return fresh.length;
   });
   res.status(201).json({ added });
@@ -183,6 +184,7 @@ trainingRouter.delete('/trainings/:id/enroll/:staffId', async (req, res) => {
     if (!e) throw notFound('Participant');
     if (e.preScore != null || e.postScore != null || e.attended) throw conflict('This participant has already started the training.');
     await tx.trainingEnrollment.delete({ where: { id: e.id } });
+    await audit(tx, ctx, { action: 'DELETE', entity: 'TrainingEnrollment', entityId: e.id, branchId: t.branchId, before: { trainingId: id, staffId } });
   });
   res.status(204).end();
 });
@@ -197,7 +199,12 @@ trainingRouter.post('/trainings/:id/attendance', async (req, res) => {
     const me = await ownStaff(tx, ctx);
     if (!canManageHr(ctx, t.branchId) && (!me || t.trainerStaffId !== me.id)) throw forbidden();
     if (t.startDate > todayUtc()) throw badRequest('The training has not started yet.');
+    const staffIds = body.entries.map((entry) => entry.staffId);
+    if (new Set(staffIds).size !== staffIds.length) throw badRequest('Each participant may appear only once.');
+    const enrollments = await tx.trainingEnrollment.findMany({ where: { trainingId: id, staffId: { in: staffIds } }, select: { staffId: true } });
+    if (enrollments.length !== staffIds.length) throw badRequest('Attendance can only be recorded for enrolled participants.');
     for (const e of body.entries) await tx.trainingEnrollment.updateMany({ where: { trainingId: id, staffId: e.staffId }, data: { attended: e.attended } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'TrainingAttendance', entityId: id, branchId: t.branchId, after: { entries: body.entries.length, attended: body.entries.filter((entry) => entry.attended).length } });
   });
   res.json({ ok: true });
 });
@@ -229,10 +236,11 @@ trainingRouter.post('/trainings/:id/test', async (req, res) => {
     }
     const correct = questions.filter((q, i) => body.answers[i] === q.answerIndex).length;
     const score = Math.round((correct / questions.length) * 10000) / 100;
-    await tx.trainingEnrollment.update({
+    const updated = await tx.trainingEnrollment.update({
       where: { id: e.id },
       data: body.kind === 'PRE' ? { preScore: score } : { postScore: score, completedAt: score >= t.passPercent ? new Date() : null, attended: true },
     });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'TrainingTest', entityId: updated.id, branchId: t.branchId, after: { kind: body.kind, score, passed: score >= t.passPercent } });
     if (body.kind === 'POST' && score >= t.passPercent && t.category === 'INDUCTION') {
       await tx.onboardingTask.updateMany({ where: { staffId: me.id, taskKey: 'induction', done: false }, data: { done: true, doneAt: new Date(), note: `${t.title}: ${score}%` } });
     }
@@ -257,6 +265,8 @@ trainingRouter.post('/trainings/:id/feedback', async (req, res) => {
     if (!e) throw forbidden('You are not enrolled in this training.');
     if (!e.attended) throw conflict('Give feedback after attending the training.');
     await tx.trainingEnrollment.update({ where: { id: e.id }, data: { rating: body.rating, feedback: body.feedback ?? null } });
+    const training = await trainingOrThrow(tx, id);
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'TrainingFeedback', entityId: e.id, branchId: training.branchId, after: { rating: body.rating, feedbackProvided: !!body.feedback } });
   });
   res.json({ ok: true });
 });

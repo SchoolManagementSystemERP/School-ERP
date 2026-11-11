@@ -126,6 +126,8 @@ model Branch {
   region       Region?      @relation(fields: [regionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   grades       Grade[]
   memberships  Membership[]
+  ledgerAccounts LedgerAccount[]
+  bankAccounts BankAccount[]
 
   @@unique([organizationId, code])
 }
@@ -610,8 +612,9 @@ model FeePlan {
   branchId       String  @db.UniqueIdentifier
   academicYearId String  @db.UniqueIdentifier
   gradeId        String  @db.UniqueIdentifier
-  feeHead        String  @default("TUITION") @db.NVarChar(30) // TUITION | TRANSPORT | HOSTEL | EXAM | OTHER
+  feeHead        String  @default("TUITION") @db.NVarChar(30) // TUITION | TRANSPORT | HOSTEL | LIBRARY | EXAMINATION | LAB | ADMISSION | SECURITY_DEPOSIT | EXAM | OTHER
   annualAmount   Decimal @db.Decimal(12, 2)
+  components     String? @db.NVarChar(Max) // JSON [{ name, amount }]
 
   installments FeeInstallment[]
 
@@ -652,7 +655,7 @@ model FeePayment {
   installmentId  String   @db.UniqueIdentifier // FeeInstallment
   amount         Decimal  @db.Decimal(12, 2)
   lateFee        Decimal  @default(0) @db.Decimal(12, 2)
-  method         String   @db.NVarChar(20) // UPI | CARD | NETBANKING | CASH | CHEQUE
+  method         String   @db.NVarChar(20) // UPI | CARD | NETBANKING | CASH | CHEQUE | DEMAND_DRAFT | POS
   status         String   @db.NVarChar(15) // PENDING | SUCCESS | FAILED | REFUNDED
   receiptNo      String   @db.NVarChar(40)
   gatewayRef     String?  @db.NVarChar(100) // Razorpay payment id
@@ -660,9 +663,190 @@ model FeePayment {
   receivedById   String?  @db.UniqueIdentifier // cashier for counter payments
   paidAt         DateTime
 
+  refunds FeeRefund[]
+
   @@unique([organizationId, receiptNo])
   @@index([organizationId, branchId, paidAt])
   @@index([studentId])
+}
+
+model FeeRefund {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  paymentId      String   @db.UniqueIdentifier
+  refundNo       String   @db.NVarChar(40)
+  amount         Decimal  @db.Decimal(12, 2)
+  method         String   @db.NVarChar(20) // BANK_TRANSFER | UPI | CHEQUE | CASH
+  reason         String   @db.NVarChar(300)
+  reference      String?  @db.NVarChar(100)
+  refundedAt     DateTime
+  refundedById   String   @db.UniqueIdentifier
+
+  payment FeePayment @relation(fields: [paymentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organizationId, refundNo])
+  @@index([organizationId, branchId, refundedAt])
+}
+
+/// Tenant- and branch-scoped chart of accounts.
+model LedgerAccount {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  code           String   @db.NVarChar(20)
+  name           String   @db.NVarChar(120)
+  category       String   @db.NVarChar(20) // ASSET | LIABILITY | INCOME | EXPENSE | EQUITY
+  parentId       String?  @db.UniqueIdentifier
+  isSystem       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  branch       Branch         @relation(fields: [branchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parent       LedgerAccount? @relation("LedgerAccountHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children     LedgerAccount[] @relation("LedgerAccountHierarchy")
+  journalLines JournalLine[]
+  bankAccounts BankAccount[]
+
+  @@unique([branchId, code])
+  @@index([organizationId, branchId, category, isActive])
+}
+
+/// Posted journal vouchers are immutable; corrections are made with reversing entries.
+model JournalEntry {
+  id             String   @id @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  entryNo        String   @db.NVarChar(40)
+  entryDate      DateTime @db.Date
+  description    String   @db.NVarChar(300)
+  sourceType     String   @default("MANUAL") @db.NVarChar(30)
+  sourceId       String?  @db.NVarChar(60)
+  createdById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  lines JournalLine[]
+
+  @@unique([branchId, entryNo])
+  @@index([organizationId, branchId, entryDate])
+}
+
+model JournalLine {
+  id             String  @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String  @db.UniqueIdentifier
+  journalEntryId String  @db.UniqueIdentifier
+  accountId      String  @db.UniqueIdentifier
+  description    String? @db.NVarChar(200)
+  debit          Decimal @default(0) @db.Decimal(12, 2)
+  credit         Decimal @default(0) @db.Decimal(12, 2)
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  account      LedgerAccount @relation(fields: [accountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bankStatementLines BankStatementLine[]
+
+  @@index([organizationId, accountId])
+}
+
+model BankAccount {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String   @db.UniqueIdentifier
+  branchId        String   @db.UniqueIdentifier
+  ledgerAccountId String   @db.UniqueIdentifier
+  name            String   @db.NVarChar(100)
+  bankName        String   @db.NVarChar(100)
+  accountLast4    String   @db.NVarChar(4)
+  accountType     String   @db.NVarChar(30) // OPERATING | HOSTEL | TRUST | GRANT | OTHER
+  openingBalance  Decimal  @default(0) @db.Decimal(12, 2)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  branch        Branch         @relation(fields: [branchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ledgerAccount LedgerAccount  @relation(fields: [ledgerAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  statementLines BankStatementLine[]
+
+  @@unique([branchId, name])
+  @@index([organizationId, branchId, isActive])
+}
+
+model BankStatementLine {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String   @db.UniqueIdentifier
+  branchId        String   @db.UniqueIdentifier
+  bankAccountId   String   @db.UniqueIdentifier
+  transactionDate DateTime @db.Date
+  description     String   @db.NVarChar(300)
+  reference       String?  @db.NVarChar(100)
+  direction       String   @db.NVarChar(6) // CREDIT | DEBIT
+  amount          Decimal  @db.Decimal(12, 2)
+  fingerprint     String   @db.NVarChar(64)
+  status          String   @default("UNMATCHED") @db.NVarChar(12) // UNMATCHED | MATCHED | IGNORED
+  matchedJournalLineId String? @db.UniqueIdentifier
+  importedById    String   @db.UniqueIdentifier
+  createdAt       DateTime @default(now())
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  matchedJournalLine JournalLine? @relation(fields: [matchedJournalLineId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([bankAccountId, fingerprint])
+  @@index([organizationId, branchId, transactionDate, status])
+}
+
+model DepartmentBudget {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  fiscalYear     String   @db.NVarChar(7) // 2026-27
+  department     String   @db.NVarChar(100)
+  category       String   @db.NVarChar(60)
+  allocated      Decimal  @db.Decimal(12, 2)
+  hardStop       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  @@unique([branchId, fiscalYear, department, category])
+  @@index([organizationId, branchId, fiscalYear, isActive])
+}
+
+model GrantFund {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  branchId       String   @db.UniqueIdentifier
+  code           String   @db.NVarChar(40)
+  name           String   @db.NVarChar(200)
+  donor          String   @db.NVarChar(200)
+  restriction    String   @db.NVarChar(500)
+  awarded        Decimal  @db.Decimal(12, 2)
+  received       Decimal  @default(0) @db.Decimal(12, 2)
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  status         String   @default("ACTIVE") @db.NVarChar(15) // ACTIVE | COMPLETED | CLOSED
+  createdById    String   @db.UniqueIdentifier
+  createdAt      DateTime @default(now())
+
+  transactions GrantTransaction[]
+
+  @@unique([branchId, code])
+  @@index([organizationId, branchId, status])
+}
+
+model GrantTransaction {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId  String   @db.UniqueIdentifier
+  branchId        String   @db.UniqueIdentifier
+  grantFundId     String   @db.UniqueIdentifier
+  transactionDate DateTime @db.Date
+  kind            String   @db.NVarChar(10) // RECEIPT | EXPENSE
+  description     String   @db.NVarChar(300)
+  amount          Decimal  @db.Decimal(12, 2)
+  sourceType      String?  @db.NVarChar(30)
+  sourceId        String?  @db.NVarChar(60)
+  createdById     String   @db.UniqueIdentifier
+  createdAt       DateTime @default(now())
+
+  grantFund GrantFund @relation(fields: [grantFundId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organizationId, branchId, grantFundId, transactionDate])
 }
 
 model Expense {
@@ -675,6 +859,8 @@ model Expense {
   amount         Decimal  @db.Decimal(12, 2)
   paidTo         String?  @db.NVarChar(150)
   method         String   @db.NVarChar(20) // UPI | CASH | CHEQUE | BANK_TRANSFER | CARD
+  department     String?  @db.NVarChar(100)
+  grantFundId    String?  @db.UniqueIdentifier
   createdById    String   @db.UniqueIdentifier
 
   @@index([organizationId, branchId, date])
@@ -708,6 +894,27 @@ model Payslip {
   staff      Staff      @relation(fields: [staffId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([payrollRunId, staffId])
+}
+
+model StaffAdvance {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId     String   @db.UniqueIdentifier
+  branchId           String   @db.UniqueIdentifier
+  staffId            String   @db.UniqueIdentifier
+  principalAmount    Decimal  @db.Decimal(12, 2)
+  outstandingAmount  Decimal  @db.Decimal(12, 2)
+  installmentAmount  Decimal  @db.Decimal(12, 2)
+  startMonth         String   @db.NVarChar(7)
+  purpose            String   @db.NVarChar(300)
+  disbursedMethod    String   @db.NVarChar(20) // BANK_TRANSFER | CASH
+  reference          String?  @db.NVarChar(100)
+  disbursedAt        DateTime
+  status             String   @default("ACTIVE") @db.NVarChar(12) // ACTIVE | PAID | CANCELLED
+  createdById        String   @db.UniqueIdentifier
+  createdAt          DateTime @default(now())
+
+  @@index([organizationId, branchId, status, startMonth])
+  @@index([staffId, status])
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -984,6 +1191,9 @@ model Book {
   publishYear    Int?
   totalCopies    Int
   rack           String? @db.NVarChar(20)
+  pdfFileName    String? @db.NVarChar(260)
+  pdfSizeBytes   Int?
+  pdfContent     Bytes?  @db.VarBinary(Max)
 
   loans BookLoan[]
 
@@ -997,6 +1207,7 @@ model BookLoan {
   bookId         String    @db.UniqueIdentifier
   studentId      String?   @db.UniqueIdentifier
   staffId        String?   @db.UniqueIdentifier
+  isDigital      Boolean   @default(false)
   issueDate      DateTime  @db.Date
   dueDate        DateTime  @db.Date
   returnDate     DateTime? @db.Date
@@ -1374,9 +1585,10 @@ model VendorBill {
   gst            Decimal  @db.Decimal(12, 2)
   total          Decimal  @db.Decimal(12, 2)
   expected       Decimal  @db.Decimal(12, 2)
-  status         String   @db.NVarChar(10) // MATCHED | MISMATCH | APPROVED | PAID | ON_HOLD
+  status         String   @db.NVarChar(10) // MATCHED | MISMATCH | FIN_REVIEW | APPROVED | PAID | ON_HOLD
   note           String?  @db.NVarChar(500)
   enteredById    String   @db.UniqueIdentifier
+  payablesApprovedById String? @db.UniqueIdentifier
   createdAt      DateTime @default(now())
 
   @@unique([vendorId, billNo])
@@ -1617,7 +1829,7 @@ model AuditLog {
   organizationId String   @db.UniqueIdentifier
   branchId       String?  @db.UniqueIdentifier
   userId         String   @db.UniqueIdentifier
-  action         String   @db.NVarChar(20) // CREATE | UPDATE | DELETE | LOGIN | EXPORT
+  action         String   @db.NVarChar(20) // CREATE | UPDATE | DELETE | LOGIN | EXPORT | READ | ACTION
   entity         String   @db.NVarChar(60) // FeePayment, Mark…
   entityId       String?  @db.NVarChar(60)
   before         String?  @db.NVarChar(Max)
@@ -1626,4 +1838,17 @@ model AuditLog {
   createdAt      DateTime @default(now())
 
   @@index([organizationId, entity, createdAt])
+}
+
+/// Jarvis (voice assistant) conversation memory — each user's own questions and replies.
+model AssistantMessage {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  organizationId String   @db.UniqueIdentifier
+  userId         String   @db.UniqueIdentifier
+  role           String   @db.NVarChar(10) // user | assistant
+  content        String   @db.NVarChar(4000)
+  source         String?  @db.NVarChar(60) // data tool the reply came from
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, userId, createdAt])
 }

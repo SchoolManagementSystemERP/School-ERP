@@ -109,7 +109,10 @@ staffRouter.post('/staff', async (req, res) => {
         sensitive: sensitive ? encryptJson(sensitive) : null, bankAccount: bank && Object.values(bank).some(Boolean) ? encryptJson(bank) : null,
       },
     });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Staff', entityId: created.id, branchId, after: { ...cols, sensitive: sensitive ? 'set' : undefined, bank: bank ? 'set' : undefined } });
+    await audit(tx, ctx, {
+      action: 'CREATE', entity: 'Staff', entityId: created.id, branchId,
+      after: { staffType: cols.staffType, designation: cols.designation, department: cols.department ?? null, status: cols.status, loginCreated: !!userId },
+    });
     return { staff: staffOut(created as StaffRow, 'sensitive'), temporaryPassword };
   });
   res.status(201).json({ ...result.staff, temporaryPassword: result.temporaryPassword });
@@ -135,7 +138,22 @@ staffRouter.patch('/staff/:id', async (req, res) => {
       },
     });
     if (cols.status === 'RESIGNED' && before.userId) await tx.user.update({ where: { id: before.userId }, data: { isActive: false } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Staff', entityId: id, branchId: before.branchId, before: { ...before, sensitive: undefined, bankAccount: undefined }, after: { ...cols, sensitive: sensitive ? 'changed' : undefined, bank: bank ? 'changed' : undefined } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Staff', entityId: id, branchId: before.branchId,
+      before: { staffType: before.staffType, designation: before.designation, department: before.department, status: before.status },
+      after: {
+        changedFields: Object.keys(body).filter((field) => field !== 'sensitive' && field !== 'bank'),
+        ...(cols.staffType !== undefined ? { staffType: cols.staffType } : {}),
+        ...(cols.designation !== undefined ? { designation: cols.designation } : {}),
+        ...(cols.department !== undefined ? { department: cols.department } : {}),
+        ...(cols.status !== undefined ? { status: cols.status } : {}),
+        ...(sensitive ? { sensitiveDetailsChanged: true } : {}),
+        ...(bank ? { bankDetailsChanged: true } : {}),
+        ...(allowances !== undefined ? { allowancesChanged: true } : {}),
+        ...(profile !== undefined ? { profileChanged: true } : {}),
+        ...(cols.basicSalary !== undefined ? { salaryChanged: true } : {}),
+      },
+    });
     return updated;
   });
   res.json(staffOut(out as StaffRow, 'sensitive'));

@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
-import { ChevronDown, GraduationCap, LogOut, Menu, Settings, UserCircle, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, GraduationCap, LogOut, Menu, ScrollText, Settings, UserCircle, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher";
+import { VoiceAssistant } from "@/components/voice/VoiceAssistant";
 import { cn } from "@/components/ui/utils";
 import { currentAcademicYear } from "@/store/classes";
 import { clearAllStores } from "@/store/remote";
-import { authStore, lastLoginPath, logout } from "@/store/session";
+import { authStore, can, lastLoginPath, logout } from "@/store/session";
 
 export interface NavItem {
   name: string;
@@ -41,11 +42,27 @@ interface AppShellProps {
 export function AppShell({ portal, home, nav: portalNav, user: shown, setup, headerExtra, bottomNav }: AppShellProps) {
   // Staff portals show the signed-in person; student and parent portals pass the child they are viewing.
   const { me, role } = authStore.useValue();
+  const hasMyProfile = portalNav.some((group) => group.items.some((item) => item.href.endsWith("/my-profile")));
+  const withMyProfile = hasMyProfile
+    ? portalNav
+    : portalNav.some((group) => group.label === "Me")
+      ? portalNav.map((group) => group.label === "Me"
+        ? { ...group, items: [...group.items, { name: "My Profile", href: `${home}/my-profile`, icon: UserCircle }] }
+        : group)
+      : [...portalNav, { label: "Me", items: [{ name: "My Profile", href: `${home}/my-profile`, icon: UserCircle }] }];
   // every employee's self-service (payslips, claims, trainings, resignation)
-  const hasMyHr = portalNav.some((g) => g.items.some((i) => i.href.endsWith("/my-hr")));
-  const nav = role && !["student", "parent", "admin"].includes(role) && !hasMyHr
-    ? [...portalNav, { label: "Me", items: [{ name: "My HR", href: `${home}/my-hr`, icon: UserCircle }] }]
-    : portalNav;
+  const hasMyHr = withMyProfile.some((g) => g.items.some((i) => i.href.endsWith("/my-hr")));
+  const withMyHr = role && !["student", "parent", "admin"].includes(role) && !hasMyHr
+    ? withMyProfile.some((group) => group.label === "Me")
+      ? withMyProfile.map((group) => group.label === "Me"
+        ? { ...group, items: [...group.items, { name: "My HR", href: `${home}/my-hr`, icon: UserCircle }] }
+        : group)
+      : [...withMyProfile, { label: "Me", items: [{ name: "My HR", href: `${home}/my-hr`, icon: UserCircle }] }]
+    : withMyProfile;
+  const hasAuditLog = withMyHr.some((group) => group.items.some((item) => item.href.endsWith("/audit-log")));
+  const nav = (can("audit.read") || role === "hr") && !hasAuditLog
+    ? [...withMyHr, { label: "Governance", items: [{ name: "Audit Log", href: `${home}/audit-log`, icon: ScrollText }] }]
+    : withMyHr;
   const user = me && role !== "student" && role !== "parent"
     ? { ...shown, name: me.user.name, initials: me.user.name.replace(/^(Dr|Mr|Mrs|Ms|Shri)\.?\s+/, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() }
     : shown;
@@ -224,6 +241,7 @@ export function AppShell({ portal, home, nav: portalNav, user: shown, setup, hea
           </ul>
         </nav>
       )}
+      <VoiceAssistant />
     </div>
   );
 }

@@ -1,13 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import type { RequestContext } from '../../auth/access.js';
 import { targetBranch } from '../../auth/access.js';
 import { withTenant, type Tx } from '../../db/prisma.js';
 import { audit } from '../../lib/audit.js';
+import { decryptJson } from '../../lib/crypto.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { dateOnly, idParam, toDateString } from '../../lib/http.js';
-import { componentsOf, hrSettings, monthlyPayslip } from '../../lib/payroll.js';
+import { componentsOf, grossOf, hrSettings, monthlyPayslip } from '../../lib/payroll.js';
 import { ctxOf } from '../../middleware/authenticate.js';
+import { paymentLedgerLine, postJournal } from '../finance/ledger.js';
 import { lopDays } from '../hrms/workforce.routes.js';
 
 /**
@@ -115,6 +118,86 @@ function payrollBranches(ctx: RequestContext) {
   return ids;
 }
 
+hrRouter.get('/payroll/advances', async (req, res) => {
+  const ctx = ctxOf(req);
+  const branches = payrollBranches(ctx);
+  const rows = await withTenant(ctx.organizationId, async (tx) => {
+    const advances = await tx.staffAdvance.findMany({
+      where: { branchId: { in: branches } },
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+    });
+    const staff = await tx.staff.findMany({
+      where: { id: { in: advances.map((advance) => advance.staffId) } },
+      select: { id: true, name: true, employeeCode: true },
+    });
+    const staffById = new Map(staff.map((person) => [person.id, person]));
+    return advances.map((advance) => {
+      const person = staffById.get(advance.staffId);
+      if (!person) throw new Error('A salary advance references a missing staff record.');
+      return { advance, staff: person };
+    });
+  });
+  res.json(rows.map(({ advance, staff }) => ({
+    id: advance.id, staffId: advance.staffId, employeeCode: staff.employeeCode, staffName: staff.name,
+    branchId: advance.branchId, principalAmount: money(advance.principalAmount),
+    outstandingAmount: money(advance.outstandingAmount), installmentAmount: money(advance.installmentAmount),
+    startMonth: advance.startMonth, purpose: advance.purpose, disbursedMethod: advance.disbursedMethod,
+    reference: advance.reference, disbursedAt: toDateString(advance.disbursedAt), status: advance.status,
+  })));
+});
+
+hrRouter.post('/payroll/advances', async (req, res) => {
+  const ctx = ctxOf(req);
+  const body = z.object({
+    branchId: uuid.optional(), staffId: uuid,
+    principalAmount: z.number().positive().max(100_000_000).refine((value) => Number(value.toFixed(2)) === value),
+    installmentAmount: z.number().positive().max(100_000_000).refine((value) => Number(value.toFixed(2)) === value),
+    startMonth: monthParam,
+    purpose: z.string().trim().min(3).max(300),
+    disbursedMethod: z.enum(['BANK_TRANSFER', 'CASH']),
+    reference: z.string().trim().max(100).optional(),
+  }).parse(req.body);
+  if (body.installmentAmount > body.principalAmount) throw badRequest('The monthly installment cannot exceed the advance amount.');
+  const branchId = targetBranch(ctx, 'payroll.run', body.branchId);
+  const row = await withTenant(ctx.organizationId, async (tx) => {
+    const staff = await tx.staff.findFirst({
+      where: { id: body.staffId, branchId, status: { in: ['ACTIVE', 'ON_LEAVE'] } },
+      select: { id: true, name: true, employeeCode: true, basicSalary: true, allowances: true, compensation: true },
+    });
+    if (!staff) throw notFound('Active staff member in this branch');
+    if (grossOf(componentsOf(staff)) <= 0) throw badRequest('Salary advances are only available for staff with a payroll salary structure.');
+    const advance = await tx.staffAdvance.create({
+      data: {
+        id: randomUUID(), organizationId: ctx.organizationId, branchId, staffId: staff.id,
+        principalAmount: body.principalAmount, outstandingAmount: body.principalAmount,
+        installmentAmount: body.installmentAmount, startMonth: body.startMonth,
+        purpose: body.purpose, disbursedMethod: body.disbursedMethod,
+        reference: body.reference || null, disbursedAt: new Date(),
+        status: 'ACTIVE', createdById: ctx.userId,
+      },
+    });
+    const paymentAccount = await paymentLedgerLine(tx, branchId, body.disbursedMethod);
+    await postJournal(tx, ctx, {
+      branchId, date: advance.disbursedAt, description: `Salary advance · ${staff.employeeCode}`,
+      sourceType: 'STAFF_ADVANCE', sourceId: advance.id,
+      lines: [
+        { accountCode: '1110', description: `${staff.employeeCode} · ${body.purpose}`, debit: body.principalAmount },
+        { ...paymentAccount, description: `Advance paid by ${body.disbursedMethod}`, credit: body.principalAmount },
+      ],
+    });
+    await audit(tx, ctx, {
+      action: 'CREATE', entity: 'StaffAdvance', entityId: advance.id, branchId,
+      after: { staffId: staff.id, employeeCode: staff.employeeCode, startMonth: body.startMonth, status: advance.status },
+    });
+    return advance;
+  });
+  res.status(201).json({
+    id: row.id, staffId: row.staffId, principalAmount: money(row.principalAmount),
+    outstandingAmount: money(row.outstandingAmount), installmentAmount: money(row.installmentAmount),
+    startMonth: row.startMonth, purpose: row.purpose, status: row.status,
+  });
+});
+
 /** GET /payroll — payroll runs with their payslips. */
 hrRouter.get('/payroll', async (req, res) => {
   const ctx = ctxOf(req);
@@ -131,6 +214,39 @@ hrRouter.get('/payroll', async (req, res) => {
     }));
   });
   res.json(out);
+});
+
+hrRouter.get('/payroll/:month/bank-transfer', async (req, res) => {
+  const ctx = ctxOf(req);
+  const month = monthParam.parse(req.params.month);
+  const branchId = targetBranch(ctx, 'payroll.run', ctx.activeBranchId ?? undefined);
+  if (!ctx.access.can('staff.write', branchId)) throw forbidden('Bank transfer exports require permission to view staff banking details.');
+  const rows = await withTenant(ctx.organizationId, async (tx) => {
+    const run = await tx.payrollRun.findUnique({
+      where: { branchId_month: { branchId, month } },
+      include: { payslips: { include: { staff: { select: { employeeCode: true, name: true, bankAccount: true } } } } },
+    });
+    if (!run) throw notFound('Payroll for this month');
+    const payees = run.payslips.filter((slip) => money(slip.net) > 0).map((slip) => {
+      const bank = decryptJson<{ accountNo?: unknown; ifsc?: unknown; bankName?: unknown }>(slip.staff.bankAccount);
+      const accountNo = typeof bank?.accountNo === 'string' ? bank.accountNo.trim() : '';
+      const ifsc = typeof bank?.ifsc === 'string' ? bank.ifsc.trim().toUpperCase() : '';
+      if (!accountNo || !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc)) {
+        return { employeeCode: slip.staff.employeeCode, name: slip.staff.name, accountNo: '', ifsc: '', amount: money(slip.net) };
+      }
+      return { employeeCode: slip.staff.employeeCode, name: slip.staff.name, accountNo, ifsc, amount: money(slip.net) };
+    });
+    const missing = payees.filter((payee) => !payee.accountNo || !payee.ifsc);
+    if (missing.length) {
+      throw badRequest(`Add valid account number and IFSC for: ${missing.map((person) => person.employeeCode).join(', ')}.`);
+    }
+    await audit(tx, ctx, {
+      action: 'EXPORT', entity: 'PayrollBankTransfer', branchId,
+      after: { month, payees: payees.length, total: money(payees.reduce((sum, payee) => sum + payee.amount, 0)) },
+    });
+    return payees;
+  });
+  res.json(rows);
 });
 
 /** POST /payroll/:month/process — (re)computes a month's payslips for the branch. Needs payroll.run; a paid month is final. */
@@ -154,6 +270,10 @@ hrRouter.post('/payroll/:month/process', async (req, res) => {
     const lop = await lopDays(tx, staff.map((x) => x.id), month);
     // approved claims not yet paid (or attached to this month by an earlier run) are reimbursed with this salary
     const claims = await tx.expenseClaim.findMany({ where: { staffId: { in: staff.map((x) => x.id) }, status: 'APPROVED', OR: [{ paidMonth: null }, { paidMonth: month }] } });
+    const advances = await tx.staffAdvance.findMany({
+      where: { branchId, staffId: { in: staff.map((person) => person.id) }, status: 'ACTIVE', startMonth: { lte: month } },
+      orderBy: { createdAt: 'asc' },
+    });
     const run = existing
       ? await tx.payrollRun.update({ where: { id: existing.id }, data: { processedAt: new Date(), status: 'PROCESSED' } })
       : await tx.payrollRun.create({ data: { organizationId: ctx.organizationId, branchId, month, status: 'PROCESSED', processedAt: new Date() } });
@@ -162,10 +282,31 @@ hrRouter.post('/payroll/:month/process', async (req, res) => {
       .map((s) => {
         const reimbursement = claims.filter((c) => c.staffId === s.id).reduce((t, c) => t + Number(c.amount), 0);
         const p = monthlyPayslip(componentsOf(s), settings, { daysInMonth: monthEnd.getUTCDate(), lopDays: lop.get(s.id) ?? 0, reimbursement });
-        return { staffId: s.id, gross: p.gross, deductions: p.deductions, net: p.net, breakdown: { ...p, employeeCode: s.employeeCode, name: s.name, designation: s.designation, staffType: s.staffType } };
+        let advanceCapacity = Math.max(0, p.net);
+        const advanceRepayments = advances.filter((advance) => advance.staffId === s.id).flatMap((advance) => {
+          const deduction = money(Math.min(money(advance.outstandingAmount), money(advance.installmentAmount), advanceCapacity));
+          advanceCapacity = money(advanceCapacity - deduction);
+          return deduction > 0 ? [{ id: advance.id, amount: deduction }] : [];
+        });
+        const advanceDeduction = advanceRepayments.reduce((sum, repayment) => sum + repayment.amount, 0);
+        return {
+          staffId: s.id, gross: p.gross, deductions: money(p.deductions + advanceDeduction),
+          net: money(p.net - advanceDeduction),
+          breakdown: {
+            ...p, deductionsDetail: { ...p.deductionsDetail, salaryAdvance: advanceDeduction },
+            advanceRepayments, employeeCode: s.employeeCode, name: s.name,
+            designation: s.designation, staffType: s.staffType,
+          },
+        };
       })
       .filter((s) => s.gross > 0);
-    await tx.expenseClaim.updateMany({ where: { id: { in: claims.map((c) => c.id) } }, data: { paidMonth: month } });
+    const assignedClaims = await tx.expenseClaim.updateMany({ where: { id: { in: claims.map((c) => c.id) } }, data: { paidMonth: month } });
+    if (assignedClaims.count) {
+      await audit(tx, ctx, {
+        action: 'UPDATE', entity: 'ExpenseClaim', branchId,
+        after: { count: assignedClaims.count, paidMonth: month, status: 'APPROVED' },
+      });
+    }
     if (slips.length) await tx.payslip.createMany({ data: slips.map((s) => ({ organizationId: ctx.organizationId, payrollRunId: run.id, staffId: s.staffId, gross: s.gross, deductions: s.deductions, net: s.net, breakdown: JSON.stringify(s.breakdown) })) });
     const totals = slips.reduce((t, s) => ({ gross: t.gross + s.gross, net: t.net + s.net }), { gross: 0, net: 0 });
     await audit(tx, ctx, { action: existing ? 'UPDATE' : 'CREATE', entity: 'PayrollRun', entityId: run.id, branchId, after: { month, payslips: slips.length, ...totals } });
@@ -180,11 +321,65 @@ hrRouter.post('/payroll/:month/pay', async (req, res) => {
   const month = monthParam.parse(req.params.month);
   const branchId = targetBranch(ctx, 'payroll.run', z.object({ branchId: uuid.optional() }).parse(req.body ?? {}).branchId);
   const out = await withTenant(ctx.organizationId, async (tx) => {
+    await tx.$queryRaw`SELECT [id] FROM dbo.[PayrollRun] WITH (UPDLOCK, HOLDLOCK) WHERE [branchId] = ${branchId} AND [month] = ${month}`;
     const run = await tx.payrollRun.findUnique({ where: { branchId_month: { branchId, month } } });
     if (!run) throw notFound('Payroll for this month');
     if (run.status === 'PAID') throw conflict('This month is already paid.');
+    const slips = await tx.payslip.findMany({ where: { payrollRunId: run.id } });
     const updated = await tx.payrollRun.update({ where: { id: run.id }, data: { status: 'PAID', paidAt: new Date() } });
-    await tx.expenseClaim.updateMany({ where: { branchId, status: 'APPROVED', paidMonth: month }, data: { status: 'PAID' } });
+    const gross = slips.reduce((sum, slip) => sum + money(slip.gross), 0);
+    const deductions = slips.reduce((sum, slip) => sum + money(slip.deductions), 0);
+    const net = slips.reduce((sum, slip) => sum + money(slip.net), 0);
+    const repayments: { advanceId: string; staffId: string; amount: number }[] = [];
+    for (const slip of slips) {
+      const parsed = z.object({
+        advanceRepayments: z.array(z.object({ id: uuid, amount: z.number().positive() })).default([]),
+      }).passthrough().safeParse(JSON.parse(slip.breakdown));
+      if (!parsed.success) throw new Error(`Payslip ${slip.id} has invalid stored salary-advance details.`);
+      for (const repayment of parsed.data.advanceRepayments) {
+        repayments.push({ advanceId: repayment.id, staffId: slip.staffId, amount: repayment.amount });
+      }
+    }
+    const advanceDeduction = money(repayments.reduce((sum, repayment) => sum + repayment.amount, 0));
+    const statutoryDeductions = money(deductions - advanceDeduction);
+    if (gross > 0) {
+      const bankAccount = await paymentLedgerLine(tx, branchId, 'BANK_TRANSFER');
+      await postJournal(tx, ctx, {
+        branchId, date: updated.paidAt!, description: `Payroll disbursement · ${month}`,
+        sourceType: 'PAYROLL_RUN', sourceId: run.id,
+        lines: [
+          { accountCode: '5000', description: `Gross payroll ${month}`, debit: gross },
+          { ...bankAccount, description: `Net salaries paid ${month}`, credit: net },
+          ...(statutoryDeductions > 0 ? [{ accountCode: '2100', description: `Statutory payroll deductions ${month}`, credit: statutoryDeductions }] : []),
+          ...(advanceDeduction > 0 ? [{ accountCode: '1110', description: `Staff salary advance recovery ${month}`, credit: advanceDeduction }] : []),
+        ],
+      });
+    }
+    for (const repayment of repayments) {
+      await tx.$queryRaw`SELECT [id] FROM dbo.[StaffAdvance] WITH (UPDLOCK, HOLDLOCK) WHERE [id] = ${repayment.advanceId}`;
+      const advance = await tx.staffAdvance.findUnique({ where: { id: repayment.advanceId } });
+      if (!advance || advance.staffId !== repayment.staffId || advance.branchId !== branchId || advance.status !== 'ACTIVE'
+        || money(advance.outstandingAmount) < repayment.amount) {
+        throw conflict('A salary advance balance changed after payroll was processed. Re-process payroll before marking it paid.');
+      }
+      const outstandingAmount = money(money(advance.outstandingAmount) - repayment.amount);
+      const updatedAdvance = await tx.staffAdvance.update({
+        where: { id: advance.id },
+        data: { outstandingAmount, status: outstandingAmount === 0 ? 'PAID' : 'ACTIVE' },
+      });
+      await audit(tx, ctx, {
+        action: 'UPDATE', entity: 'StaffAdvance', entityId: updatedAdvance.id, branchId,
+        before: { outstandingAmount: money(advance.outstandingAmount), status: advance.status },
+        after: { outstandingAmount, status: updatedAdvance.status, payrollMonth: month, repayment: repayment.amount },
+      });
+    }
+    const paidClaims = await tx.expenseClaim.updateMany({ where: { branchId, status: 'APPROVED', paidMonth: month }, data: { status: 'PAID' } });
+    if (paidClaims.count) {
+      await audit(tx, ctx, {
+        action: 'UPDATE', entity: 'ExpenseClaim', branchId,
+        after: { count: paidClaims.count, paidMonth: month, status: 'PAID' },
+      });
+    }
     await audit(tx, ctx, { action: 'UPDATE', entity: 'PayrollRun', entityId: run.id, branchId, before: { status: run.status }, after: { status: 'PAID' } });
     return { id: updated.id, month, status: updated.status, paidAt: toDateString(updated.paidAt) };
   });

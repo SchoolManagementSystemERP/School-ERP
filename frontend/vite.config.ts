@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 
 function figmaAssetResolver() {
@@ -16,13 +17,16 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig({
+// `npm run dev:mobile` (mode "mobile") serves over HTTPS with a self-signed certificate: phones only
+// allow the microphone (voice assistant) on https:// or localhost, never on http://192.168.x.x.
+export default defineConfig(({ mode }) => ({
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
     // Tailwind is not being actively used – do not remove them
     react(),
     tailwindcss(),
+    ...(mode === 'mobile' ? [basicSsl()] : []),
   ],
   resolve: {
     alias: {
@@ -46,4 +50,4 @@ export default defineConfig({
       '/api': { target: process.env.VITE_API_TARGET ?? 'http://localhost:4000', changeOrigin: false },
     },
   },
-})
+}))

@@ -103,8 +103,8 @@ Full definitions are in `prisma/schema.prisma`. Key design decisions:
 | Exams | Exam, ExamPaper, Mark | `Exam.branchId = NULL` means a common exam for every branch. Students see marks only when `resultsPublished`. |
 | Attendance | AttendanceSession, AttendanceEntry | One register per section per day (or per period). |
 | Coursework | Assignment, AssignmentSubmission, StudyNote, Attachment | Files go to blob storage. |
-| Fees | FeePlan, FeeInstallment, FeeConcession, FeePayment | Plan per grade per branch per year; fee heads (tuition, transport, hostel…). Payments are idempotent (no double charge on retry). |
-| Accounts / HR | Expense, PayrollRun, Payslip, LeaveRequest | Salary details live on `Staff`. |
+| Fees | FeePlan, FeeInstallment, FeeConcession, FeePayment | Plan per grade, branch and year; fee heads can be itemized into named annual components, then split across dated installments. Payments are idempotent (no double charge on retry). |
+| Accounts / HR | LedgerAccount, JournalEntry, JournalLine, Expense, PayrollRun, Payslip, LeaveRequest | Chart of accounts and immutable double-entry manual vouchers are branch-scoped. Automated posting from fees, procurement and payroll is a later phase. Salary details live on `Staff`. |
 | Communication | Announcement, AnnouncementAudience, Message, Notification | `Notification` is the outbox for SMS / WhatsApp / email. |
 | Facilities | Book, BookLoan, InventoryItem, StockMovement, Vehicle, TransportRoute, RouteStop, TransportAllocation, HostelRoom, HostelAllocation, Outpass | |
 | Front office | Enquiry, Visitor | |
@@ -133,7 +133,7 @@ Lists support `?page=&pageSize=&search=&sort=`. Errors use a single JSON shape `
 | Exams & marks | `GET/POST /exams` · `POST /exams/:id/publish` · `GET/PUT /marks?examPaperId` (bulk) · `GET /results/:studentId` · `GET /exams/:id/admit-cards` |
 | Coursework | `GET/POST /assignments` · `POST /assignments/:id/submissions` · `PUT /submissions/:id/grade` · `GET/POST /notes` · `POST /files` (upload URL) |
 | Fees | `GET/PUT /fee-plans` · `GET /students/:id/fee-account` · `POST /payments/order` (Razorpay) · `POST /payments/webhook` · `POST /payments/counter` (cash) · `GET /receipts/:id.pdf` |
-| Accounts & HR | `GET/POST /expenses` · `POST /payroll/:month/process` · `POST /payroll/:month/pay` · `GET/POST /leave` · `POST /leave/:id/decide` |
+| Accounts & HR | `GET/POST /accounts/ledger/accounts` · `POST /accounts/ledger/accounts/setup` · `GET/POST /accounts/ledger/journals` · `GET /accounts/ledger/reports?from=&to=` · `GET/POST /expenses` · `POST /payroll/:month/process` · `POST /payroll/:month/pay` · `GET/POST /leave` · `POST /leave/:id/decide` |
 | Communication | `GET/POST /announcements` · `GET/POST /messages` · `POST /messages/:id/read` |
 | Facilities | `/books` · `/loans` · `/inventory/items` · `/inventory/movements` · `/vehicles` · `/routes` · `/transport/allocations` · `/hostel/rooms` · `/hostel/allocations` · `/outpasses` |
 | Front office | `GET/POST /enquiries` · `PATCH /enquiries/:id` · `GET/POST /visitors` · `POST /visitors/:id/checkout` |

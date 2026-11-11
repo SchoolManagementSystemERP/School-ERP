@@ -32,9 +32,13 @@ async function login(username: string) {
 }
 
 const TAG = `fin-test-${Date.now()}`;
-const created = { payments: [] as string[], expenses: [] as string[], leaves: [] as string[], payrollRun: "" };
+const created = { payments: [] as string[], refunds: [] as string[], expenses: [] as string[], leaves: [] as string[], advances: [] as string[], payrollRun: "" };
 
-type Account = { studentId: string; annualFee: number; concessionPercent: number; total: number; installments: { no: number; dueDate: string; amount: number }[] };
+type Account = {
+  studentId: string; annualFee: number; concessionPercent: number; total: number;
+  installments: { no: number; dueDate: string; amount: number }[];
+  feeHeads: { feeHead: string; total: number; components: { name: string; amount: number }[] }[];
+};
 
 async function main() {
   const accountant = await login("accountant");
@@ -46,12 +50,23 @@ async function main() {
   const aliceId: string = (await call(student, "GET", "/me")).body.students[0].id;
 
   console.log("Fee structure & accounts");
-  const structure = (await call(student, "GET", "/fees/structure")).body as { lateFeePerDay: number; grades: { gradeId: string; grade: string; annualAmount: number | null; installments: { percent: number }[] }[] };
+  const structure = (await call(student, "GET", "/fees/structure")).body as { lateFeePerDay: number; grades: { gradeId: string; grade: string; annualAmount: number | null; installments: { percent: number }[]; feeHeads: { feeHead: string; annualAmount: number; components: { name: string; amount: number }[] | null }[] }[] };
   ok(structure.grades.some((g) => g.annualAmount && g.installments.length), "anyone in the school sees the fee structure", structure);
   const g10 = structure.grades.find((g) => g.grade === "Class 10")!;
   ok(Math.abs(g10.installments.reduce((a, i) => a + i.percent, 0) - 100) < 0.01, "installment percentages add up to 100 %");
   ok((await call(teacher, "PUT", `/fees/structure/${g10.gradeId}`, { annualAmount: 1 })).status === 403, "a teacher cannot change fees");
   ok((await call(accountant, "PUT", `/fees/structure/${g10.gradeId}`, { annualAmount: g10.annualAmount })).status === 200, "the accountant sets a grade's fee");
+  const audit = await call(accountant, "GET", "/audit-log?entity=FeePlan&pageSize=10");
+  ok(audit.status === 200 && audit.body.events.some((event: { entity: string; action: string }) => event.entity === "FeePlan" && event.action === "UPDATE"), "authorized finance staff can review fee changes in the audit log", audit.body);
+  ok((await call(teacher, "GET", "/audit-log")).status === 403, "staff without audit permission cannot read the audit log");
+  const originalComponents = g10.feeHeads.find((head) => head.feeHead === "TUITION")?.components ?? null;
+  const firstComponentAmount = Math.round(g10.annualAmount! * 40) / 100;
+  const testComponents = [{ name: "Core tuition test", amount: firstComponentAmount }, { name: "Development test", amount: g10.annualAmount! - firstComponentAmount }];
+  ok((await call(accountant, "PUT", `/fees/structure/${g10.gradeId}`, { feeHead: "TUITION", annualAmount: g10.annualAmount, components: [{ name: "Incomplete", amount: 1 }] })).status === 400, "component amounts must add up to the annual fee");
+  ok((await call(accountant, "PUT", `/fees/structure/${g10.gradeId}`, { feeHead: "TUITION", annualAmount: g10.annualAmount, components: testComponents })).status === 200, "the accountant saves a detailed fee component breakdown");
+  const detailedStructure = (await call(student, "GET", "/fees/structure")).body as typeof structure;
+  const detailedTuition = detailedStructure.grades.find((g) => g.gradeId === g10.gradeId)?.feeHeads.find((head) => head.feeHead === "TUITION");
+  ok(detailedTuition?.components.length === 2 && detailedTuition.components.reduce((sum, component) => sum + component.amount, 0) === g10.annualAmount, "fee components are returned as an itemized annual breakdown", detailedTuition);
 
   const all = (await call(accountant, "GET", "/fees/accounts")).body as Account[];
   const mine = (await call(parent, "GET", "/fees/accounts")).body as Account[];
@@ -60,9 +75,11 @@ async function main() {
   const withConcession = all.find((a) => a.concessionPercent > 0);
   ok(!!withConcession && withConcession.total === Math.round((withConcession.annualFee * (100 - withConcession.concessionPercent)) / 100), "concessions reduce the annual fee", withConcession);
   ok(all.every((a) => a.installments.reduce((t, i) => t + i.amount, 0) === a.total), "installments always add up to the total (no rupee lost to rounding)");
+  ok(all.every((a) => a.feeHeads.every((head) => Math.round(head.components.reduce((sum, component) => sum + component.amount, 0) * 100) / 100 === head.total)), "itemized student fee components add up after concessions");
+  await call(accountant, "PUT", `/fees/structure/${g10.gradeId}`, { feeHead: "TUITION", annualAmount: g10.annualAmount, components: originalComponents });
 
   console.log("Payments");
-  const payments = (await call(accountant, "GET", "/fees/payments")).body as { studentId: string; installmentNo: number }[];
+  const payments = (await call(accountant, "GET", "/fees/payments")).body as { studentId: string; installmentNo: number; amount: number; netAmount?: number }[];
   const unpaid = (a: Account) => a.installments.filter((i) => !payments.some((p) => p.studentId === a.studentId && p.installmentNo === i.no));
   const target = all.find((a) => a.studentId !== aliceId && unpaid(a).length)!;
   const inst = unpaid(target)[0];
@@ -77,6 +94,28 @@ async function main() {
   ok(retry.status === 200 && retry.body.id === paid.body.id, "a retry with the same Idempotency-Key returns the same payment");
   ok((await call(accountant, "POST", "/fees/payments", { studentId: target.studentId, installmentNo: inst.no, method: "Cash" })).status === 409, "an installment cannot be paid twice");
   ok((await call(accountant, "POST", "/fees/payments", { studentId: target.studentId, installmentNo: 9, method: "Cash" })).status === 400, "an installment outside the plan is refused");
+  const receipt = await call(accountant, "GET", `/fees/payments/${paid.body.id}/receipt`);
+  ok(receipt.status === 200 && receipt.body.receiptNo === paid.body.receiptNo && receipt.body.amount === paid.body.amount, "the saved receipt is printable with payment details", receipt.body);
+  const partialAmount = Math.round(paid.body.amount * 40) / 100;
+  const partialRefund = await call(accountant, "POST", `/fees/payments/${paid.body.id}/refunds`, {
+    amount: partialAmount, method: "BANK_TRANSFER", reason: `${TAG} partial refund`,
+  });
+  if (partialRefund.body?.id) created.refunds.push(partialRefund.body.id);
+  ok(partialRefund.status === 201 && partialRefund.body.amount === partialAmount, "an accountant can issue a partial fee refund", partialRefund.body);
+  const afterPartialRefund = await call(accountant, "GET", `/fees/payments/${paid.body.id}/receipt`);
+  ok(afterPartialRefund.status === 200 && afterPartialRefund.body.refundedAmount === partialAmount && afterPartialRefund.body.refunds.length === 1, "the receipt shows partial refund history", afterPartialRefund.body);
+  const remainingRefund = await call(accountant, "POST", `/fees/payments/${paid.body.id}/refunds`, {
+    amount: Math.round((paid.body.amount - partialAmount) * 100) / 100,
+    method: "BANK_TRANSFER", reason: `${TAG} final refund`,
+  });
+  if (remainingRefund.body?.id) created.refunds.push(remainingRefund.body.id);
+  ok(remainingRefund.status === 201, "the remaining balance can be refunded separately", remainingRefund.body);
+  const refundedPayments = (await call(accountant, "GET", "/fees/payments")).body as { id: string; status: string; netAmount: number }[];
+  const fullyRefundedPayment = refundedPayments.find((payment) => payment.id === paid.body.id);
+  ok(fullyRefundedPayment?.status === "REFUNDED" && fullyRefundedPayment.netAmount === 0, "a fully refunded receipt is retained with zero net collection", fullyRefundedPayment);
+  const recollected = await call(accountant, "POST", "/fees/payments", { studentId: target.studentId, installmentNo: inst.no, method: "Cash" }, { "Idempotency-Key": `${TAG}-after-refund` });
+  if (recollected.body?.id) created.payments.push(recollected.body.id);
+  ok(recollected.status === 201 && recollected.body.amount === inst.amount, "a fully refunded installment can be collected again", recollected.body);
 
   const aliceAcc = all.find((a) => a.studentId === aliceId)!;
   const aliceDue = unpaid(aliceAcc)[0];
@@ -132,6 +171,21 @@ async function main() {
   ok(Array.isArray(runs), "HR sees payroll runs");
   ok((await call(teacher, "GET", "/payroll")).status === 403, "a teacher cannot see payroll");
   ok((await call(hr, "POST", "/payroll/2099-01/process", {})).status === 400, "future months cannot be processed");
+  const teachingStaff = (await call(hr, "GET", "/staff?type=TEACHING")).body as { id: string; employeeCode: string }[];
+  const advanceTarget = teachingStaff.find((person) => person.employeeCode === "T002");
+  if (!advanceTarget) throw new Error("T002 was not found for the salary advance test.");
+  const advance = await call(hr, "POST", "/payroll/advances", {
+    staffId: advanceTarget.id, principalAmount: 1200, installmentAmount: 300,
+    startMonth: month, purpose: TAG, disbursedMethod: "CASH",
+  });
+  if (advance.body?.id) created.advances.push(advance.body.id);
+  ok(advance.status === 201 && advance.body.outstandingAmount === 1200, "HR records and disburses a salary advance", advance.body);
+  ok((await call(teacher, "POST", "/payroll/advances", {
+    staffId: advanceTarget.id, principalAmount: 1200, installmentAmount: 300,
+    startMonth: month, purpose: TAG, disbursedMethod: "CASH",
+  })).status === 403, "teachers cannot issue salary advances");
+  const listedAdvances = await call(hr, "GET", "/payroll/advances");
+  ok(listedAdvances.status === 200 && listedAdvances.body.some((item: { id: string }) => item.id === advance.body.id), "HR sees staff advance balances");
   const existing = runs.find((r) => r.month === month);
   if (existing?.status === "PAID") {
     ok((await call(hr, "POST", `/payroll/${month}/process`, {})).status === 409, "a paid month cannot be processed again");
@@ -146,12 +200,23 @@ async function main() {
     if (!existing) {
       ok((await call(accountant, "POST", `/payroll/${month}/pay`, {})).body.status === "PAID", "the accountant marks salaries paid");
       ok((await call(hr, "POST", `/payroll/${month}/process`, {})).status === 409, "a paid month cannot be processed again");
+      const afterPay = await call(hr, "GET", "/payroll/advances");
+      const remainingAdvance = afterPay.body.find((item: { id: string }) => item.id === advance.body.id);
+      ok(remainingAdvance?.outstandingAmount === 900, "payroll automatically recovers the monthly advance installment", remainingAdvance);
     }
   }
 }
 
 async function cleanup() {
   await withSystem(async (tx) => {
+    const advanceEntries = await tx.journalEntry.findMany({
+      where: { sourceType: "STAFF_ADVANCE", sourceId: { in: created.advances } },
+      select: { id: true },
+    });
+    await tx.journalLine.deleteMany({ where: { journalEntryId: { in: advanceEntries.map((entry) => entry.id) } } });
+    await tx.journalEntry.deleteMany({ where: { id: { in: advanceEntries.map((entry) => entry.id) } } });
+    await tx.staffAdvance.deleteMany({ where: { id: { in: created.advances } } });
+    await tx.feeRefund.deleteMany({ where: { id: { in: created.refunds } } });
     await tx.feePayment.deleteMany({ where: { id: { in: created.payments } } });
     await tx.expense.deleteMany({ where: { OR: [{ id: { in: created.expenses } }, { description: { startsWith: TAG } }] } });
     await tx.leaveRequest.deleteMany({ where: { OR: [{ id: { in: created.leaves } }, { reason: { startsWith: TAG } }] } });

@@ -150,7 +150,7 @@ usersRouter.post('/users', async (req, res) => {
       },
     });
     for (const m of memberships) await tx.membership.create({ data: { ...m, organizationId: ctx.organizationId, userId: created.id } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'User', entityId: created.id, after: { username: body.username, name: body.name, memberships } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'User', entityId: created.id, after: { memberships } });
     return tx.user.findUniqueOrThrow({ where: { id: created.id }, select: userSelect });
   });
   res.status(201).json({ ...user, temporaryPassword: body.password ? undefined : password });
@@ -174,7 +174,7 @@ usersRouter.patch('/users/:id', async (req, res) => {
     const before = await manageableUser(tx, ctx.access, id);
     await tx.user.update({ where: { id }, data: body });
     if (body.isActive === false) await tx.refreshToken.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'User', entityId: id, before: { name: before.name, email: before.email, phone: before.phone, isActive: before.isActive }, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'User', entityId: id, before: { isActive: before.isActive }, after: { changedFields: Object.keys(body) } });
     return tx.user.findUniqueOrThrow({ where: { id }, select: userSelect });
   });
   res.json(user);

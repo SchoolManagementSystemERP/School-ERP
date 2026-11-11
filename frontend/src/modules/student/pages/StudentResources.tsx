@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,17 +10,75 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, Download, FileText, File, Search, Calendar } from "lucide-react";
+import { Upload, Download, FileText, File, Search, Calendar, BookOpen, LockKeyhole } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/api/client";
+import { guidOf } from "@/api/ids";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { downloadNote, useNotes } from "@/store/notes";
 import { useCurrentStudent } from "@/store/session";
+
+interface DigitalBook {
+  id: string;
+  title: string;
+  author: string;
+  category: string;
+  pdfFileName: string;
+  pdfSizeBytes: number | null;
+  issued: boolean;
+}
+
+const formatFileSize = (size: number | null) => {
+  if (!size) return "PDF";
+  return size >= 1024 * 1024 ? `${(size / (1024 * 1024)).toFixed(1)} MB` : `${Math.ceil(size / 1024)} KB`;
+};
 
 export function StudentResources() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSubject, setSelectedSubject] = useState("all");
 
   const student = useCurrentStudent();
+  const studentGuid = student ? guidOf("student", student.id) : null;
   const notes = useNotes().filter((n) => student && n.class === student.class);
+  const [digitalBooks, setDigitalBooks] = useState<DigitalBook[]>([]);
+  const [loadingDigitalBooks, setLoadingDigitalBooks] = useState(false);
+  const [openingBookId, setOpeningBookId] = useState<string | null>(null);
+  const [readerUrl, setReaderUrl] = useState<string | null>(null);
+  const [readerTitle, setReaderTitle] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    if (!studentGuid) {
+      setDigitalBooks([]);
+      setLoadingDigitalBooks(false);
+      return () => { active = false; };
+    }
+    setLoadingDigitalBooks(true);
+    api.get<DigitalBook[]>(`/library/digital-books?studentId=${encodeURIComponent(studentGuid)}`)
+      .then((books) => { if (active) setDigitalBooks(books); })
+      .catch((error: unknown) => { if (active) toast.error(error instanceof Error ? error.message : "Could not load digital books"); })
+      .finally(() => { if (active) setLoadingDigitalBooks(false); });
+    return () => { active = false; };
+  }, [studentGuid]);
+
+  useEffect(() => {
+    if (!readerUrl) return;
+    return () => URL.revokeObjectURL(readerUrl);
+  }, [readerUrl]);
+
+  const handleReadBook = async (book: DigitalBook) => {
+    if (!book.issued || !studentGuid) return;
+    setOpeningBookId(book.id);
+    try {
+      const pdf = await api.getBlob(`/library/digital-books/${book.id}/pdf?studentId=${encodeURIComponent(studentGuid)}`);
+      setReaderTitle(book.title);
+      setReaderUrl(URL.createObjectURL(pdf));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not open this book");
+    } finally {
+      setOpeningBookId(null);
+    }
+  };
 
   const resources = notes.map((n) => ({
     id: n.id,
@@ -196,6 +254,56 @@ export function StudentResources() {
           </CardContent>
         </Card>
       )}
+
+      <section className="space-y-4">
+        <div>
+          <h2 className="font-display text-xl font-semibold text-foreground">Digital Library</h2>
+          <p className="mt-1 text-sm text-muted-foreground">PDF books unlock only while they are issued to you.</p>
+        </div>
+        {loadingDigitalBooks ? (
+          <Card><CardContent className="p-6 text-sm text-muted-foreground">Loading digital books…</CardContent></Card>
+        ) : digitalBooks.length ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {digitalBooks.map((book) => (
+              <Card key={book.id}>
+                <CardContent className="flex items-start gap-4 p-5">
+                  <div className="rounded-lg bg-blue-50 p-3 dark:bg-blue-500/10">
+                    <BookOpen className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h3 className="font-semibold text-foreground">{book.title}</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">{book.author} · {book.category}</p>
+                      </div>
+                      <Badge variant={book.issued ? "default" : "secondary"} className={book.issued ? "bg-green-600" : ""}>
+                        {book.issued ? "Issued to you" : <><LockKeyhole className="mr-1 h-3 w-3" /> Locked</>}
+                      </Badge>
+                    </div>
+                    <p className="mt-3 truncate text-xs text-muted-foreground">{book.pdfFileName} · {formatFileSize(book.pdfSizeBytes)}</p>
+                    <Button className="mt-4 w-full gap-2" disabled={!book.issued || openingBookId === book.id} onClick={() => handleReadBook(book)}>
+                      {book.issued ? <><FileText className="h-4 w-4" />{openingBookId === book.id ? "Opening…" : "Read PDF"}</> : <><LockKeyhole className="h-4 w-4" />Ask librarian to issue</>}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Card>
+            <CardContent className="p-8 text-center text-sm text-muted-foreground">
+              No digital books have been uploaded for your library yet.
+            </CardContent>
+          </Card>
+        )}
+      </section>
+
+      <Dialog open={readerUrl !== null} onOpenChange={(open) => { if (!open) setReaderUrl(null); }}>
+        <DialogContent className="flex h-[85vh] max-w-5xl flex-col">
+          <DialogHeader><DialogTitle>{readerTitle}</DialogTitle></DialogHeader>
+          {readerUrl && <iframe title={readerTitle} src={readerUrl} className="min-h-0 flex-1 rounded-md border border-border" />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

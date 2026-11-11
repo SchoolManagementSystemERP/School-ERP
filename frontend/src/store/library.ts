@@ -15,17 +15,23 @@ export let FINE_PER_DAY = 5;
 /** Default loan period in days. */
 export let LOAN_DAYS = 14;
 
-interface ApiBook { id: string; title: string; author: string; isbn: string | null; category: string; publisher: string | null; edition: string | null; publishYear: number | null; totalCopies: number; rack: string | null }
+interface ApiBook { id: string; title: string; author: string; isbn: string | null; category: string; publisher: string | null; edition: string | null; publishYear: number | null; totalCopies: number; rack: string | null; pdfFileName?: string | null; pdfSizeBytes?: number | null }
 interface ApiLoan { id: string; bookId: string; studentId: string | null; issueDate: string; dueDate: string; returnDate: string | null; finePaid: number }
-interface ApiLibrary { finePerDay: number; loanDays: number; books: ApiBook[]; loans: ApiLoan[] }
+interface ApiDigitalLoan { id: string; bookId: string; studentId: string; issueDate: string; dueDate: string; returnDate: string | null }
+interface ApiLibrary { finePerDay: number; loanDays: number; books: ApiBook[]; loans: ApiLoan[]; digitalLoans: ApiDigitalLoan[] }
 
 const toBook = (b: ApiBook): Book => ({
   id: numId("book", b.id), title: b.title, author: b.author, isbn: b.isbn ?? "", category: b.category, publisher: b.publisher ?? "",
   edition: b.edition ?? "", publishYear: b.publishYear ?? 0, totalCopies: b.totalCopies, rack: b.rack ?? "",
+  pdfFileName: b.pdfFileName ?? null, pdfSizeBytes: b.pdfSizeBytes ?? null,
 });
 const toLoan = (l: ApiLoan): Loan => ({
   id: numId("loan", l.id), bookId: numId("book", l.bookId), studentId: l.studentId ? numId("student", l.studentId) : 0, issueDate: l.issueDate, dueDate: l.dueDate,
   ...(l.returnDate ? { returnDate: l.returnDate, finePaid: l.finePaid } : {}),
+});
+const toDigitalLoan = (l: ApiDigitalLoan): Loan => ({
+  id: numId("loan", l.id), bookId: numId("book", l.bookId), studentId: numId("student", l.studentId),
+  issueDate: l.issueDate, dueDate: l.dueDate, ...(l.returnDate ? { returnDate: l.returnDate } : {}),
 });
 const bookApi = (b: Omit<Book, "id">) => ({
   title: b.title, author: b.author, isbn: b.isbn || null, category: b.category, publisher: b.publisher || null, edition: b.edition || null,
@@ -45,6 +51,7 @@ const bookBase = remoteCollection<Book>("books", async () => {
   return (lib?.books ?? []).map(toBook);
 });
 export const loanStore = remoteStore<Loan[]>("loans", [], async () => ((await fetchLibrary())?.loans ?? []).filter((l) => l.studentId).map(toLoan));
+export const digitalLoanStore = remoteStore<Loan[]>("digitalLoans", [], async () => ((await fetchLibrary())?.digitalLoans ?? []).map(toDigitalLoan));
 
 export const bookStore = Object.assign(bookBase, {
   add(record: Omit<Book, "id">): Book {
@@ -66,6 +73,46 @@ export const bookStore = Object.assign(bookBase, {
 
 export const useBooks = () => bookBase.useItems();
 export const useLoans = () => loanStore.useValue();
+export const useDigitalLoans = () => digitalLoanStore.useValue();
+
+export async function uploadBookPdf(bookId: number, file: File) {
+  const saved = await api.uploadPdf<{ pdfFileName: string; pdfSizeBytes: number }>(
+    `/library/books/${guidOf("book", bookId)}/pdf`,
+    file,
+  );
+  bookBase.set((books) => books.map((book) => book.id === bookId
+    ? { ...book, pdfFileName: saved.pdfFileName, pdfSizeBytes: saved.pdfSizeBytes }
+    : book));
+}
+
+/** Issues online PDF access without consuming or checking physical copy availability. */
+export function issueDigitalBook(bookId: number, studentId: number, issueDate: string, dueDate: string): string | null {
+  const book = bookBase.getAll().find((item) => item.id === bookId);
+  if (!book?.pdfFileName) return "Upload a PDF for this book before issuing digital access";
+  if (digitalLoanStore.get().some((loan) => loan.bookId === bookId && loan.studentId === studentId && !loan.returnDate)) {
+    return "This student already has active digital access to this book";
+  }
+  if (dueDate < issueDate) return "Due date must be after the issue date";
+  const id = tempId();
+  void mutate(digitalLoanStore, (list) => [...list, { id, bookId, studentId, issueDate, dueDate }], async () => {
+    const saved = await api.post<ApiDigitalLoan>("/library/digital-loans", {
+      bookId: guidOf("book", bookId), studentId: guidOf("student", studentId), issueDate, dueDate,
+    });
+    digitalLoanStore.set((list) => list.map((loan) => loan.id === id ? toDigitalLoan(saved) : loan));
+  });
+  return null;
+}
+
+/** Returns a PDF loan and revokes its access without affecting physical loans. */
+export function returnDigitalBook(loanId: number) {
+  const loan = digitalLoanStore.get().find((item) => item.id === loanId);
+  if (!loan || loan.returnDate) return;
+  void mutate(
+    digitalLoanStore,
+    (list) => list.map((item) => item.id === loanId ? { ...item, returnDate: today() } : item),
+    () => api.post(`/library/digital-loans/${guidOf("loan", loanId)}/return`, {}),
+  );
+}
 
 export function loanStatus(loan: Loan): LoanStatus {
   if (loan.returnDate) return "returned";

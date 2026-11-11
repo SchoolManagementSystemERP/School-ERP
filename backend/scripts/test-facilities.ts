@@ -21,6 +21,15 @@ async function call(token: string | null, method: string, path: string, body?: u
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
+async function uploadPdf(token: string, bookId: string) {
+  const res = await fetch(`${base}/library/books/${bookId}/pdf`, {
+    method: "PUT",
+    headers: { authorization: "Bearer " + token, "content-type": "application/pdf", "x-file-name": encodeURIComponent("digital-copy.pdf") },
+    body: Buffer.from("%PDF-1.4\n%School ERP test PDF"),
+  });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : null };
+}
 async function login(username: string) {
   const r = await call(null, "POST", "/auth/login", { organization: "greenwood", username, password: "Demo@1234" });
   if (r.status !== 200) throw new Error(`login ${username}: ${JSON.stringify(r.body)}`);
@@ -39,22 +48,44 @@ async function main() {
   const warden = await login("warden");
   const principal = await login("principal");
   const teacher = await login("T002");
-  const roster = (await call(principal, "GET", "/students/full")).body as { id: string; gender: string | null; branchId: string }[];
+  const roster = (await call(principal, "GET", "/students/full")).body as { id: string; admissionNo: string; hasLogin: boolean; gender: string | null; branchId: string }[];
 
   console.log("Library");
   const book = await call(librarian, "POST", "/library/books", { title: TAG, author: "Test Author", category: "Fiction", totalCopies: 1 });
   if (book.body?.id) created.books.push(book.body.id);
   ok(book.status === 201, "the librarian adds a book", book.body);
+  const readerStudent = roster.find((student) => student.hasLogin && student.branchId === book.body.branchId);
+  if (!readerStudent) throw new Error("The library test needs a demo student login in the librarian's branch.");
+  const reader = await login(readerStudent.admissionNo);
+  const uploadedPdf = await uploadPdf(librarian, book.body.id);
+  ok(uploadedPdf.status === 200 && uploadedPdf.body.pdfFileName === "digital-copy.pdf", "the librarian uploads a PDF", uploadedPdf.body);
+  const studentCatalog = (await call(reader, "GET", `/library/digital-books?studentId=${readerStudent.id}`)).body as { id: string; issued: boolean }[];
+  ok(studentCatalog.some((entry) => entry.id === book.body.id && !entry.issued), "a PDF stays locked before issue");
+  ok((await call(reader, "GET", `/library/digital-books/${book.body.id}/pdf?studentId=${readerStudent.id}`)).status === 404, "a student cannot fetch a locked PDF");
   ok((await call(teacher, "POST", "/library/books", { title: "x", author: "y", category: "z", totalCopies: 1 })).status === 403, "a teacher cannot add books");
-  const loan = await call(librarian, "POST", "/library/loans", { bookId: book.body.id, studentId: roster[0].id, issueDate: day(-20), dueDate: day(-6) });
+  const loan = await call(librarian, "POST", "/library/loans", { bookId: book.body.id, studentId: readerStudent.id, issueDate: day(-20), dueDate: day(-6) });
   ok(loan.status === 201, "the librarian issues it (backdated, now overdue)", loan.body);
-  ok((await call(librarian, "POST", "/library/loans", { bookId: book.body.id, studentId: roster[1].id, issueDate: day(0), dueDate: day(14) })).status === 409, "no copies left → cannot issue again");
+  ok((await call(reader, "GET", `/library/digital-books/${book.body.id}/pdf?studentId=${readerStudent.id}`)).status === 404, "a hard-copy issue does not unlock the PDF");
+  const digitalLoan = await call(librarian, "POST", "/library/digital-loans", { bookId: book.body.id, studentId: readerStudent.id, issueDate: day(0), dueDate: day(14) });
+  ok(digitalLoan.status === 201 && digitalLoan.body.id, "digital PDF can be issued independently of hard-copy stock", digitalLoan.body);
+  const unlocked = await fetch(`${base}/library/digital-books/${book.body.id}/pdf?studentId=${readerStudent.id}`, { headers: { authorization: "Bearer " + reader } });
+  ok(unlocked.status === 200 && Buffer.from(await unlocked.arrayBuffer()).toString("ascii").startsWith("%PDF-"), "an issued student can read the PDF");
+  const secondStudent = roster.find((student) => student.id !== readerStudent.id && student.branchId === book.body.branchId);
+  if (!secondStudent) throw new Error("The library test needs a second student in the librarian's branch.");
+  ok((await call(librarian, "POST", "/library/loans", { bookId: book.body.id, studentId: secondStudent.id, issueDate: day(0), dueDate: day(14) })).status === 409, "no copies left → cannot issue again");
+  const secondDigitalLoan = await call(librarian, "POST", "/library/digital-loans", { bookId: book.body.id, studentId: secondStudent.id, issueDate: day(0), dueDate: day(14) });
+  ok(secondDigitalLoan.status === 201, "a second student can receive the PDF despite zero physical copies");
+  ok((await call(librarian, "POST", `/library/loans/${digitalLoan.body.id}/return`, {})).status === 404, "digital access cannot be returned as a hard-copy issue");
+  ok((await call(librarian, "POST", `/library/digital-loans/${digitalLoan.body.id}/return`, {})).status === 200, "digital access can be revoked independently");
+  ok((await call(reader, "GET", `/library/digital-books/${book.body.id}/pdf?studentId=${readerStudent.id}`)).status === 404, "returning the digital issue locks its PDF while the physical loan remains active");
+  ok((await call(librarian, "POST", `/library/digital-loans/${secondDigitalLoan.body.id}/return`, {})).status === 200, "the second digital issue can also be returned");
   ok((await call(librarian, "PATCH", `/library/books/${book.body.id}`, { totalCopies: 0 })).status === 400, "copies cannot drop below those on loan");
   ok((await call(librarian, "DELETE", `/library/books/${book.body.id}`)).status === 400, "a book on loan cannot be deleted");
   const lib = (await call(principal, "GET", "/library")).body as { finePerDay: number; books: { id: string }[] };
   ok(lib.books.some((b) => b.id === book.body.id), "the principal sees the library");
   const ret = await call(librarian, "POST", `/library/loans/${loan.body.id}/return`, {});
   ok(ret.status === 200 && ret.body.finePaid === 6 * lib.finePerDay, "returning it charges the late fine (6 days)", ret.body);
+  ok((await call(reader, "GET", `/library/digital-books/${book.body.id}/pdf?studentId=${readerStudent.id}`)).status === 404, "returning the book locks its PDF again");
   ok((await call(librarian, "POST", `/library/loans/${loan.body.id}/return`, {})).status === 409, "it cannot be returned twice");
   ok((await call(librarian, "DELETE", `/library/books/${book.body.id}`)).status === 204, "then the book can be deleted");
   created.books = [];

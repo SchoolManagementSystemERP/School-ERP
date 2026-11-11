@@ -9,6 +9,8 @@ export interface Book {
   totalCopies: number;
   rack: string;
   publishYear: number;
+  pdfFileName?: string | null;
+  pdfSizeBytes?: number | null;
 }
 
 export interface Loan {

@@ -174,6 +174,41 @@ export const payrollStore = remoteStore<PayrollRun[]>("payroll", [], async () =>
   canAny("payroll.run", "reports.view") ? (await ifAllowed(api.get<ApiRun[]>("/payroll"), [])).map(toRun) : []);
 export const usePayroll = () => payrollStore.useValue();
 
+export interface StaffAdvance {
+  id: string;
+  staffId: string;
+  employeeCode: string;
+  staffName: string;
+  principalAmount: number;
+  outstandingAmount: number;
+  installmentAmount: number;
+  startMonth: string;
+  purpose: string;
+  disbursedMethod: string;
+  reference: string | null;
+  disbursedAt: string | null;
+  status: string;
+}
+
+const staffAdvanceStore = remoteStore<StaffAdvance[]>("staff-advances", [], async () =>
+  canAny("payroll.run", "reports.view") ? ifAllowed(api.get<StaffAdvance[]>("/payroll/advances"), []) : []);
+export const useStaffAdvances = () => staffAdvanceStore.useValue();
+
+export async function createStaffAdvance(input: {
+  staffId: number;
+  principalAmount: number;
+  installmentAmount: number;
+  startMonth: string;
+  purpose: string;
+  disbursedMethod: "BANK_TRANSFER" | "CASH";
+}) {
+  await api.post("/payroll/advances", {
+    ...input,
+    staffId: guidOf("staff", input.staffId),
+  });
+  await staffAdvanceStore.load(true);
+}
+
 /** Processes payroll for a month; the server computes the payslips from the salary structure. */
 export function processPayroll(month = monthOf()): PayrollRun {
   const run: PayrollRun = { month, lines: currentPayslips(), processedOn: today() };

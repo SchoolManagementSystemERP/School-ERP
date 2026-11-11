@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { StatCard } from "@/components/common/StatCard";
 import { cn } from "@/components/ui/utils";
 import { today } from "@/lib/dates";
+import { canAny } from "@/store/auth";
 import { EXPENSE_CATEGORIES } from "@/store/finance";
 import {
   decideBill, inr, payBill, pettyCashBalance, receivedValue, recordBill, round2, spendPettyCash, tdsFor, topUpPettyCash,
@@ -24,11 +25,12 @@ import { ErrorText, useAction } from "../components";
 const BILL_TONE: Record<BillStatus, string> = {
   MATCHED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   MISMATCH: "bg-red-500/10 text-red-700 dark:text-red-300",
+  FIN_REVIEW: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
   APPROVED: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
   PAID: "bg-muted text-muted-foreground",
   ON_HOLD: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
 };
-const BILL_LABEL: Record<BillStatus, string> = { MATCHED: "Matches PO + GRN", MISMATCH: "Does not match", APPROVED: "Approved to pay", PAID: "Paid", ON_HOLD: "On hold" };
+const BILL_LABEL: Record<BillStatus, string> = { MATCHED: "Matches PO + GRN", MISMATCH: "Does not match", FIN_REVIEW: "Finance review", APPROVED: "Approved to pay", PAID: "Paid", ON_HOLD: "On hold" };
 
 function EnterBill({ po, onClose }: { po: PurchaseOrder; onClose: () => void }) {
   const bills = useVendorBills();
@@ -166,11 +168,13 @@ export function AccountsPayables() {
   const vendors = useVendors();
   const indents = useIndents();
   const receipts = useGoodsReceipts();
+  const settings = useProcurementSettings();
   const [billFor, setBillFor] = useState<PurchaseOrder | null>(null);
   const [payFor, setPayFor] = useState<VendorBill | null>(null);
   const [notes, setNotes] = useState<Record<number, string>>({});
   const decide = useAction();
   const vendorName = (id: number) => vendors.find((v) => v.id === id)?.name ?? "—";
+  const canApproveFinance = canAny("accounting.manage");
 
   const unbilled = orders.filter((p) => p.status !== "CANCELLED").map((p) => ({ p, left: round2(receivedValue(p).total - bills.filter((b) => b.poId === p.id && b.status !== "ON_HOLD").reduce((s, b) => s + b.total, 0)) })).filter((x) => x.left > 1);
   const open = bills.filter((b) => b.status !== "PAID");
@@ -187,7 +191,7 @@ export function AccountsPayables() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Goods received, no bill yet" value={unbilled.length} icon={FileInput} tone="blue" hint={inr(unbilled.reduce((s, x) => s + x.left, 0))} />
         <StatCard label="Ready to pay" value={due.length} icon={CheckCircle2} tone="green" hint={inr(due.reduce((s, b) => s + b.total, 0))} />
-        <StatCard label="Mismatched / on hold" value={open.filter((b) => b.status === "MISMATCH" || b.status === "ON_HOLD").length} icon={AlertTriangle} tone="red" />
+        <StatCard label="Needs review" value={open.filter((b) => b.status === "MISMATCH" || b.status === "ON_HOLD" || b.status === "FIN_REVIEW").length} icon={AlertTriangle} tone="red" />
         <StatCard label="TDS to deposit" value={inr(tdsThisMonth.reduce((s, p) => s + p.tds, 0))} icon={Landmark} tone="amber" hint={`by ${tdsDue}`} />
       </div>
 
@@ -232,8 +236,9 @@ export function AccountsPayables() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {(b.status === "MISMATCH" || b.status === "ON_HOLD") && <Input className="h-8 w-56" placeholder="Reason to pay anyway" value={notes[b.id] ?? ""} onChange={(e) => setNotes({ ...notes, [b.id]: e.target.value })} aria-label="Reason" />}
-                    {(b.status === "MISMATCH" || b.status === "ON_HOLD") && <Button size="sm" variant="outline" onClick={() => decide.run(() => decideBill(b.id, "approve", notes[b.id] ?? ""), () => toast.success("Bill approved"))}>Approve</Button>}
-                    {b.status !== "ON_HOLD" && <Button size="sm" variant="outline" onClick={() => decide.run(() => decideBill(b.id, "hold", notes[b.id] ?? "Held by accounts"), () => toast.success("Bill put on hold"))}>Hold</Button>}
+                    {(b.status === "MISMATCH" || b.status === "ON_HOLD" || (b.status === "MATCHED" && b.total >= settings.financeApprovalThreshold)) && <Button size="sm" variant="outline" onClick={() => decide.run(() => decideBill(b.id, "approve", notes[b.id] ?? ""), () => toast.success(b.total >= settings.financeApprovalThreshold ? "Sent for Finance Manager approval" : "Bill approved"))}>{b.total >= settings.financeApprovalThreshold ? "Send to Finance" : "Approve"}</Button>}
+                    {b.status === "FIN_REVIEW" && canApproveFinance && <Button size="sm" variant="outline" onClick={() => decide.run(() => decideBill(b.id, "approve", notes[b.id] ?? ""), () => toast.success("Finance approval recorded"))}>Approve payment</Button>}
+                    {b.status !== "ON_HOLD" && (b.status !== "FIN_REVIEW" || canApproveFinance) && <Button size="sm" variant="outline" onClick={() => decide.run(() => decideBill(b.id, "hold", notes[b.id] ?? "Held by accounts"), () => toast.success("Bill put on hold"))}>Hold</Button>}
                     {(b.status === "MATCHED" || b.status === "APPROVED") && <Button size="sm" className="gap-1.5" onClick={() => setPayFor(b)}><Banknote className="h-4 w-4" />Pay</Button>}
                   </div>
                 </CardContent>

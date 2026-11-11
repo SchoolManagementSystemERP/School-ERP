@@ -10,3 +10,5 @@ CREATE UNIQUE NONCLUSTERED INDEX [Staff_userId_key] ON [dbo].[Staff]([userId]) W
 CREATE UNIQUE NONCLUSTERED INDEX [Student_userId_key] ON [dbo].[Student]([userId]) WHERE [userId] IS NOT NULL;
 CREATE UNIQUE NONCLUSTERED INDEX [Guardian_userId_key] ON [dbo].[Guardian]([userId]) WHERE [userId] IS NOT NULL;
 CREATE UNIQUE NONCLUSTERED INDEX [UX_Vendor_code] ON [dbo].[Vendor]([organizationId], [code]) WHERE [code] IS NOT NULL;
+CREATE UNIQUE NONCLUSTERED INDEX [UX_JournalEntry_source] ON [dbo].[JournalEntry]([organizationId], [branchId], [sourceType], [sourceId]) WHERE [sourceId] IS NOT NULL;
+CREATE UNIQUE NONCLUSTERED INDEX [UX_BankStatementLine_matchedJournalLineId] ON [dbo].[BankStatementLine]([matchedJournalLineId]) WHERE [matchedJournalLineId] IS NOT NULL;

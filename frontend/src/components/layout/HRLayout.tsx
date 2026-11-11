@@ -1,6 +1,6 @@
 import {
   Briefcase, Calculator, CalendarCheck, CalendarOff, ClipboardCheck, Contact, DoorOpen, FileSignature, GraduationCap, Landmark, LayoutDashboard, Receipt, Settings,
-  UserCircle, UserPlus, WalletCards,
+  ScrollText, UserCircle, UserPlus, WalletCards,
 } from "lucide-react";
 import { AppShell, type NavGroup } from "./AppShell";
 
@@ -39,6 +39,7 @@ const nav: NavGroup[] = [
       { name: "Exits & F&F", href: "/hr/exits", icon: DoorOpen },
       { name: "HR Settings", href: "/hr/settings", icon: Settings },
       { name: "My HR", href: "/hr/my-hr", icon: UserCircle },
+      { name: "Audit Log", href: "/hr/audit-log", icon: ScrollText },
     ],
   },
 ];

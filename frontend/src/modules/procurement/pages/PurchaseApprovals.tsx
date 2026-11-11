@@ -24,15 +24,16 @@ function LimitsCard() {
   return (
     <Card>
       <CardHeader><CardTitle className="text-base">Approval rules</CardTitle></CardHeader>
-      <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-2"><Label>Principal approves up to (₹)</Label><Input type="number" value={d.principalLimit} onChange={num("principalLimit")} /></div>
         <div className="space-y-2"><Label>Quotations needed from (₹)</Label><Input type="number" value={d.quotationThreshold} onChange={num("quotationThreshold")} /></div>
         <div className="space-y-2"><Label>Number of quotations</Label><Input type="number" min={1} max={5} value={d.minQuotations} onChange={num("minQuotations")} /></div>
         <div className="space-y-2"><Label>Petty cash float (₹)</Label><Input type="number" value={d.pettyCashFloat} onChange={num("pettyCashFloat")} /></div>
         <div className="space-y-2"><Label>Petty cash per voucher (₹)</Label><Input type="number" value={d.pettyCashVoucherLimit} onChange={num("pettyCashVoucherLimit")} /></div>
-        <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-5">
+        <div className="space-y-2"><Label>Finance Manager approval from (₹)</Label><Input type="number" value={d.financeApprovalThreshold} onChange={num("financeApprovalThreshold")} /></div>
+        <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-3">
           <Button size="sm" className="gap-2" disabled={!dirty} onClick={() => updateProcurementSettings({ ...d, minQuotations: Math.max(1, Math.round(d.minQuotations)) }).then(() => toast.success("Approval rules saved"), (e: Error) => toast.error(e.message))}><Save className="h-4 w-4" />Save rules</Button>
-          <p className="text-xs text-muted-foreground">Purchases above {inr(d.principalLimit)} need Management approval after the Principal.</p>
+          <p className="text-xs text-muted-foreground">Purchases above {inr(d.principalLimit)} need Management approval after the Principal. Vendor bills from {inr(d.financeApprovalThreshold)} need Finance Manager approval before payment.</p>
         </div>
       </CardContent>
     </Card>

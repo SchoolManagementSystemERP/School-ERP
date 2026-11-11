@@ -41,7 +41,7 @@ import { outpassStore, residentStore, roomStore } from "@/store/hostel";
 import { procurementStores } from "@/store/procurement";
 import { permissionStore, roleStore, userStore } from "@/store/users";
 import { leaveStore, payrollStore, staffStore } from "@/store/hr";
-import { currentRole, ensureSession, lastLoginPath, type Role } from "@/store/session";
+import { can, currentRole, ensureSession, lastLoginPath, type Role } from "@/store/session";
 import { studentStore } from "@/store/students";
 import { teacherStore } from "@/store/teachers";
 
@@ -79,12 +79,19 @@ const requireRole = (role: Role) => async () => {
 
 /** A role's portal: guarded layout + its pages. */
 const portal = (path: string, role: Role, Layout: ComponentType, children: RouteObject[]): RouteObject => ({
-  path, loader: requireRole(role), Component: Layout, HydrateFallback: PageLoader, children,
+  path, loader: requireRole(role), Component: Layout, HydrateFallback: PageLoader,
+  children: [
+    ...children,
+    { path: "my-profile", ...P.myProfile },
+    { path: "audit-log", loader: () => can("audit.read") || (path === "/hr" && can("staff.write")) ? null : redirect(path), ...P.auditLog },
+  ],
 });
 
 // ── Pages shared by several portals ──────────────────────────────────────────
 
 const P = {
+  auditLog: page(() => import("@/modules/admin/pages/AuditLog"), "AuditLog"),
+  myProfile: page(() => import("@/modules/profile/pages/MyProfile"), "MyProfile"),
   dashboard: page(() => import("@/modules/principal/pages/PrincipalDashboard"), "PrincipalDashboard"),
   reports: page(() => import("@/modules/principal/pages/PrincipalReports"), "PrincipalReports"),
   students: page(() => import("@/modules/principal/pages/PrincipalStudents"), "PrincipalStudents"),
@@ -276,6 +283,8 @@ export const router = createBrowserRouter([
     { path: "payables", ...page(() => import("@/modules/procurement/pages/AccountsPayables"), "AccountsPayables") },
     { path: "payroll", ...payroll },
     { path: "compliance", ...compliance },
+    { path: "ledger", ...page(() => import("@/modules/accounts/pages/GeneralLedger"), "GeneralLedger") },
+    { path: "operations", ...page(() => import("@/modules/accounts/pages/AccountsOperations"), "AccountsOperations") },
     { path: "reports", ...page(() => import("@/modules/accounts/pages/AccountsReports"), "AccountsReports") },
     myHr,
   ]),

@@ -1,11 +1,17 @@
 import type { Tx } from '../db/prisma.js';
 import type { RequestContext } from '../auth/access.js';
 
+const recordedContexts = new WeakSet<RequestContext>();
+
+export function hasAuditRecord(ctx: RequestContext) {
+  return recordedContexts.has(ctx);
+}
+
 /** Writes one AuditLog row inside the caller's transaction. */
 export async function audit(
   tx: Tx,
   ctx: RequestContext,
-  entry: { action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'EXPORT'; entity: string; entityId?: string; branchId?: string | null; before?: unknown; after?: unknown },
+  entry: { action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'EXPORT' | 'READ' | 'ACTION'; entity: string; entityId?: string; branchId?: string | null; before?: unknown; after?: unknown },
 ) {
   await tx.auditLog.create({
     data: {
@@ -20,4 +26,5 @@ export async function audit(
       ip: ctx.ip,
     },
   });
+  recordedContexts.add(ctx);
 }

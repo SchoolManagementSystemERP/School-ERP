@@ -13,17 +13,18 @@ export interface Expense {
   amount: number;
   paidTo: string;
   method: string;
+  department?: string;
 }
 
 export const EXPENSE_CATEGORIES = ["Electricity", "Water", "Internet", "Maintenance", "Stationery", "Transport Fuel", "Events", "Lab Supplies", "Cleaning", "Other"];
 export const PAYMENT_METHODS = ["Bank Transfer", "UPI", "Cheque", "Cash"];
 
-interface ApiExpense { id: string; date: string; category: string; description: string; amount: number; paidTo: string | null; method: string; fromPurchase: boolean }
+interface ApiExpense { id: string; date: string; category: string; description: string; amount: number; paidTo: string | null; method: string; department?: string | null; fromPurchase: boolean }
 
 const METHOD_LABEL: Record<string, string> = { BANK_TRANSFER: "Bank Transfer", UPI: "UPI", CHEQUE: "Cheque", CASH: "Cash", CARD: "Card" };
 const toExpense = (e: ApiExpense): Expense => ({
   id: numId("expense", e.id), date: e.date, category: e.category, description: e.description, amount: e.amount,
-  paidTo: e.paidTo ?? "", method: METHOD_LABEL[e.method] ?? e.method,
+  paidTo: e.paidTo ?? "", method: METHOD_LABEL[e.method] ?? e.method, department: e.department ?? undefined,
 });
 
 /** Expenses of the current academic year, from the API (GET /expenses) — including purchase payments. */

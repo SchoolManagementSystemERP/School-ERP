@@ -62,7 +62,10 @@ classesRouter.post('/grades', async (req, res) => {
     for (const name of new Set(body.sections.map((s) => s.toUpperCase()))) {
       await tx.section.create({ data: { organizationId: ctx.organizationId, branchId, gradeId: created.id, name } });
     }
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Grade', entityId: created.id, branchId, after: body });
+    await audit(tx, ctx, {
+      action: 'CREATE', entity: 'Grade', entityId: created.id, branchId,
+      after: { name: body.name, sortOrder: body.sortOrder, medium: body.medium ?? null, sectionCount: new Set(body.sections.map((s) => s.toUpperCase())).size },
+    });
     return tx.grade.findUniqueOrThrow({ where: { id: created.id }, include: { sections: { orderBy: { name: 'asc' } } } });
   });
   res.status(201).json(grade);
@@ -86,7 +89,7 @@ classesRouter.post('/grades/:id/sections', async (req, res) => {
     if (!ctx.access.can('classes.manage', grade.branchId)) throw forbidden();
     if (body.classTeacherId) await assertTeacherInBranch(tx, body.classTeacherId, grade.branchId);
     const created = await tx.section.create({ data: { ...body, organizationId: ctx.organizationId, branchId: grade.branchId, gradeId } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Section', entityId: created.id, branchId: grade.branchId, after: body });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Section', entityId: created.id, branchId: grade.branchId, after: { name: body.name, capacity: body.capacity ?? null, room: body.room ?? null, hasClassTeacher: !!body.classTeacherId } });
     return created;
   });
   res.status(201).json(section);
@@ -103,7 +106,11 @@ classesRouter.patch('/sections/:id', async (req, res) => {
     if (!ctx.access.can('classes.manage', before.branchId)) throw forbidden();
     if (body.classTeacherId) await assertTeacherInBranch(tx, body.classTeacherId, before.branchId);
     const updated = await tx.section.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Section', entityId: id, branchId: before.branchId, before, after: body });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Section', entityId: id, branchId: before.branchId,
+      before: { name: before.name, capacity: before.capacity, room: before.room, hasClassTeacher: !!before.classTeacherId },
+      after: { ...body, ...(body.classTeacherId !== undefined ? { hasClassTeacher: !!body.classTeacherId, classTeacherId: undefined } : {}) },
+    });
     return updated;
   });
   res.json(section);
@@ -119,7 +126,11 @@ classesRouter.patch('/grades/:id', async (req, res) => {
     if (!before) throw notFound('Class');
     if (!ctx.access.can('classes.manage', before.branchId)) throw forbidden();
     const updated = await tx.grade.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Grade', entityId: id, branchId: before.branchId, before, after: body });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Grade', entityId: id, branchId: before.branchId,
+      before: { name: before.name, sortOrder: before.sortOrder, medium: before.medium },
+      after: body,
+    });
     return updated;
   });
   res.json(grade);
@@ -136,7 +147,7 @@ classesRouter.delete('/sections/:id', async (req, res) => {
     if (await tx.enrollment.count({ where: { sectionId: id } })) throw badRequest('Students are enrolled in this section — move them first.');
     await tx.sectionSubject.deleteMany({ where: { sectionId: id } });
     await tx.section.delete({ where: { id } });
-    await audit(tx, ctx, { action: 'DELETE', entity: 'Section', entityId: id, branchId: sec.branchId, before: sec });
+    await audit(tx, ctx, { action: 'DELETE', entity: 'Section', entityId: id, branchId: sec.branchId, before: { name: sec.name, capacity: sec.capacity, room: sec.room } });
   });
   res.status(204).end();
 });
@@ -152,7 +163,7 @@ classesRouter.delete('/grades/:id', async (req, res) => {
     if (await tx.section.count({ where: { gradeId: id } })) throw badRequest('Remove the sections of this class first.');
     if (await tx.feePlan.count({ where: { gradeId: id } })) throw badRequest('This class has a fee plan — remove it in Accounts first.');
     await tx.grade.delete({ where: { id } });
-    await audit(tx, ctx, { action: 'DELETE', entity: 'Grade', entityId: id, branchId: g.branchId, before: g });
+    await audit(tx, ctx, { action: 'DELETE', entity: 'Grade', entityId: id, branchId: g.branchId, before: { name: g.name, sortOrder: g.sortOrder, medium: g.medium } });
   });
   res.status(204).end();
 });
@@ -178,7 +189,7 @@ classesRouter.post('/subjects', requireAnywhere('classes.manage'), async (req, r
     .parse(req.body);
   const subject = await withTenant(ctx.organizationId, async (tx) => {
     const created = await tx.subject.create({ data: { ...body, organizationId: ctx.organizationId }, select: { id: true, code: true, name: true } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Subject', entityId: created.id, after: body });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Subject', entityId: created.id, after: { code: body.code, name: body.name } });
     return created;
   });
   res.status(201).json(subject);

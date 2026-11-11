@@ -1,6 +1,9 @@
-BEGIN TRY
+﻿BEGIN TRY
 
 BEGIN TRAN;
+
+-- CreateSchema
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = N'dbo') EXEC sp_executesql N'CREATE SCHEMA [dbo];';
 
 -- CreateTable
 CREATE TABLE [dbo].[Plan] (
@@ -488,6 +491,7 @@ CREATE TABLE [dbo].[FeePlan] (
     [gradeId] UNIQUEIDENTIFIER NOT NULL,
     [feeHead] NVARCHAR(30) NOT NULL CONSTRAINT [FeePlan_feeHead_df] DEFAULT 'TUITION',
     [annualAmount] DECIMAL(12,2) NOT NULL,
+    [components] NVARCHAR(max),
     CONSTRAINT [FeePlan_pkey] PRIMARY KEY CLUSTERED ([id]),
     CONSTRAINT [FeePlan_academicYearId_gradeId_feeHead_key] UNIQUE NONCLUSTERED ([academicYearId],[gradeId],[feeHead])
 );
@@ -540,6 +544,158 @@ CREATE TABLE [dbo].[FeePayment] (
 );
 
 -- CreateTable
+CREATE TABLE [dbo].[FeeRefund] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [paymentId] UNIQUEIDENTIFIER NOT NULL,
+    [refundNo] NVARCHAR(40) NOT NULL,
+    [amount] DECIMAL(12,2) NOT NULL,
+    [method] NVARCHAR(20) NOT NULL,
+    [reason] NVARCHAR(300) NOT NULL,
+    [reference] NVARCHAR(100),
+    [refundedAt] DATETIME2 NOT NULL,
+    [refundedById] UNIQUEIDENTIFIER NOT NULL,
+    CONSTRAINT [FeeRefund_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [FeeRefund_organizationId_refundNo_key] UNIQUE NONCLUSTERED ([organizationId],[refundNo])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[LedgerAccount] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [code] NVARCHAR(20) NOT NULL,
+    [name] NVARCHAR(120) NOT NULL,
+    [category] NVARCHAR(20) NOT NULL,
+    [parentId] UNIQUEIDENTIFIER,
+    [isSystem] BIT NOT NULL CONSTRAINT [LedgerAccount_isSystem_df] DEFAULT 0,
+    [isActive] BIT NOT NULL CONSTRAINT [LedgerAccount_isActive_df] DEFAULT 1,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [LedgerAccount_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [LedgerAccount_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [LedgerAccount_branchId_code_key] UNIQUE NONCLUSTERED ([branchId],[code])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[JournalEntry] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [entryNo] NVARCHAR(40) NOT NULL,
+    [entryDate] DATE NOT NULL,
+    [description] NVARCHAR(300) NOT NULL,
+    [sourceType] NVARCHAR(30) NOT NULL CONSTRAINT [JournalEntry_sourceType_df] DEFAULT 'MANUAL',
+    [sourceId] NVARCHAR(60),
+    [createdById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [JournalEntry_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [JournalEntry_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [JournalEntry_branchId_entryNo_key] UNIQUE NONCLUSTERED ([branchId],[entryNo])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[JournalLine] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [journalEntryId] UNIQUEIDENTIFIER NOT NULL,
+    [accountId] UNIQUEIDENTIFIER NOT NULL,
+    [description] NVARCHAR(200),
+    [debit] DECIMAL(12,2) NOT NULL CONSTRAINT [JournalLine_debit_df] DEFAULT 0,
+    [credit] DECIMAL(12,2) NOT NULL CONSTRAINT [JournalLine_credit_df] DEFAULT 0,
+    CONSTRAINT [JournalLine_pkey] PRIMARY KEY CLUSTERED ([id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[BankAccount] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [ledgerAccountId] UNIQUEIDENTIFIER NOT NULL,
+    [name] NVARCHAR(100) NOT NULL,
+    [bankName] NVARCHAR(100) NOT NULL,
+    [accountLast4] NVARCHAR(4) NOT NULL,
+    [accountType] NVARCHAR(30) NOT NULL,
+    [openingBalance] DECIMAL(12,2) NOT NULL CONSTRAINT [BankAccount_openingBalance_df] DEFAULT 0,
+    [isActive] BIT NOT NULL CONSTRAINT [BankAccount_isActive_df] DEFAULT 1,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [BankAccount_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [BankAccount_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [BankAccount_branchId_name_key] UNIQUE NONCLUSTERED ([branchId],[name])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[BankStatementLine] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [bankAccountId] UNIQUEIDENTIFIER NOT NULL,
+    [transactionDate] DATE NOT NULL,
+    [description] NVARCHAR(300) NOT NULL,
+    [reference] NVARCHAR(100),
+    [direction] NVARCHAR(6) NOT NULL,
+    [amount] DECIMAL(12,2) NOT NULL,
+    [fingerprint] NVARCHAR(64) NOT NULL,
+    [status] NVARCHAR(12) NOT NULL CONSTRAINT [BankStatementLine_status_df] DEFAULT 'UNMATCHED',
+    [matchedJournalLineId] UNIQUEIDENTIFIER,
+    [importedById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [BankStatementLine_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [BankStatementLine_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [BankStatementLine_bankAccountId_fingerprint_key] UNIQUE NONCLUSTERED ([bankAccountId],[fingerprint])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[DepartmentBudget] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [fiscalYear] NVARCHAR(7) NOT NULL,
+    [department] NVARCHAR(100) NOT NULL,
+    [category] NVARCHAR(60) NOT NULL,
+    [allocated] DECIMAL(12,2) NOT NULL,
+    [hardStop] BIT NOT NULL CONSTRAINT [DepartmentBudget_hardStop_df] DEFAULT 0,
+    [isActive] BIT NOT NULL CONSTRAINT [DepartmentBudget_isActive_df] DEFAULT 1,
+    [createdById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [DepartmentBudget_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [DepartmentBudget_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [DepartmentBudget_branchId_fiscalYear_department_category_key] UNIQUE NONCLUSTERED ([branchId],[fiscalYear],[department],[category])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[GrantFund] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [code] NVARCHAR(40) NOT NULL,
+    [name] NVARCHAR(200) NOT NULL,
+    [donor] NVARCHAR(200) NOT NULL,
+    [restriction] NVARCHAR(500) NOT NULL,
+    [awarded] DECIMAL(12,2) NOT NULL,
+    [received] DECIMAL(12,2) NOT NULL CONSTRAINT [GrantFund_received_df] DEFAULT 0,
+    [startDate] DATE NOT NULL,
+    [endDate] DATE NOT NULL,
+    [status] NVARCHAR(15) NOT NULL CONSTRAINT [GrantFund_status_df] DEFAULT 'ACTIVE',
+    [createdById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [GrantFund_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [GrantFund_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [GrantFund_branchId_code_key] UNIQUE NONCLUSTERED ([branchId],[code])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[GrantTransaction] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [grantFundId] UNIQUEIDENTIFIER NOT NULL,
+    [transactionDate] DATE NOT NULL,
+    [kind] NVARCHAR(10) NOT NULL,
+    [description] NVARCHAR(300) NOT NULL,
+    [amount] DECIMAL(12,2) NOT NULL,
+    [sourceType] NVARCHAR(30),
+    [sourceId] NVARCHAR(60),
+    [createdById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [GrantTransaction_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [GrantTransaction_pkey] PRIMARY KEY CLUSTERED ([id])
+);
+
+-- CreateTable
 CREATE TABLE [dbo].[Expense] (
     [id] UNIQUEIDENTIFIER NOT NULL,
     [organizationId] UNIQUEIDENTIFIER NOT NULL,
@@ -550,6 +706,8 @@ CREATE TABLE [dbo].[Expense] (
     [amount] DECIMAL(12,2) NOT NULL,
     [paidTo] NVARCHAR(150),
     [method] NVARCHAR(20) NOT NULL,
+    [department] NVARCHAR(100),
+    [grantFundId] UNIQUEIDENTIFIER,
     [createdById] UNIQUEIDENTIFIER NOT NULL,
     CONSTRAINT [Expense_pkey] PRIMARY KEY CLUSTERED ([id])
 );
@@ -579,6 +737,26 @@ CREATE TABLE [dbo].[Payslip] (
     [breakdown] NVARCHAR(max) NOT NULL,
     CONSTRAINT [Payslip_pkey] PRIMARY KEY CLUSTERED ([id]),
     CONSTRAINT [Payslip_payrollRunId_staffId_key] UNIQUE NONCLUSTERED ([payrollRunId],[staffId])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[StaffAdvance] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [branchId] UNIQUEIDENTIFIER NOT NULL,
+    [staffId] UNIQUEIDENTIFIER NOT NULL,
+    [principalAmount] DECIMAL(12,2) NOT NULL,
+    [outstandingAmount] DECIMAL(12,2) NOT NULL,
+    [installmentAmount] DECIMAL(12,2) NOT NULL,
+    [startMonth] NVARCHAR(7) NOT NULL,
+    [purpose] NVARCHAR(300) NOT NULL,
+    [disbursedMethod] NVARCHAR(20) NOT NULL,
+    [reference] NVARCHAR(100),
+    [disbursedAt] DATETIME2 NOT NULL,
+    [status] NVARCHAR(12) NOT NULL CONSTRAINT [StaffAdvance_status_df] DEFAULT 'ACTIVE',
+    [createdById] UNIQUEIDENTIFIER NOT NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [StaffAdvance_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [StaffAdvance_pkey] PRIMARY KEY CLUSTERED ([id])
 );
 
 -- CreateTable
@@ -831,6 +1009,9 @@ CREATE TABLE [dbo].[Book] (
     [publishYear] INT,
     [totalCopies] INT NOT NULL,
     [rack] NVARCHAR(20),
+    [pdfFileName] NVARCHAR(260),
+    [pdfSizeBytes] INT,
+    [pdfContent] VARBINARY(MAX),
     CONSTRAINT [Book_pkey] PRIMARY KEY CLUSTERED ([id])
 );
 
@@ -842,6 +1023,7 @@ CREATE TABLE [dbo].[BookLoan] (
     [bookId] UNIQUEIDENTIFIER NOT NULL,
     [studentId] UNIQUEIDENTIFIER,
     [staffId] UNIQUEIDENTIFIER,
+    [isDigital] BIT NOT NULL CONSTRAINT [BookLoan_isDigital_df] DEFAULT 0,
     [issueDate] DATE NOT NULL,
     [dueDate] DATE NOT NULL,
     [returnDate] DATE,
@@ -1178,6 +1360,7 @@ CREATE TABLE [dbo].[VendorBill] (
     [status] NVARCHAR(10) NOT NULL,
     [note] NVARCHAR(500),
     [enteredById] UNIQUEIDENTIFIER NOT NULL,
+    [payablesApprovedById] UNIQUEIDENTIFIER,
     [createdAt] DATETIME2 NOT NULL CONSTRAINT [VendorBill_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT [VendorBill_pkey] PRIMARY KEY CLUSTERED ([id]),
     CONSTRAINT [VendorBill_vendorId_billNo_key] UNIQUE NONCLUSTERED ([vendorId],[billNo])
@@ -1402,6 +1585,21 @@ CREATE TABLE [dbo].[AuditLog] (
     CONSTRAINT [AuditLog_pkey] PRIMARY KEY CLUSTERED ([id])
 );
 
+-- Jarvis conversation memory (migration 026)
+CREATE TABLE [dbo].[AssistantMessage] (
+    [id] UNIQUEIDENTIFIER NOT NULL,
+    [organizationId] UNIQUEIDENTIFIER NOT NULL,
+    [userId] UNIQUEIDENTIFIER NOT NULL,
+    [role] NVARCHAR(10) NOT NULL,
+    [content] NVARCHAR(4000) NOT NULL,
+    [source] NVARCHAR(60),
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [AssistantMessage_createdAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [AssistantMessage_pkey] PRIMARY KEY CLUSTERED ([id]),
+    CONSTRAINT [CK_AssistantMessage_role] CHECK ([role] IN (N'user', N'assistant')),
+    CONSTRAINT [FK_AssistantMessage_userId] FOREIGN KEY ([userId]) REFERENCES [dbo].[User]([id])
+);
+CREATE NONCLUSTERED INDEX [AssistantMessage_organizationId_userId_createdAt_idx] ON [dbo].[AssistantMessage]([organizationId], [userId], [createdAt]);
+
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [Subscription_organizationId_idx] ON [dbo].[Subscription]([organizationId]);
 
@@ -1461,6 +1659,33 @@ CREATE NONCLUSTERED INDEX [FeePayment_organizationId_branchId_paidAt_idx] ON [db
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [FeePayment_studentId_idx] ON [dbo].[FeePayment]([studentId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [FeeRefund_organizationId_branchId_refundedAt_idx] ON [dbo].[FeeRefund]([organizationId], [branchId], [refundedAt]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [LedgerAccount_organizationId_branchId_category_isActive_idx] ON [dbo].[LedgerAccount]([organizationId], [branchId], [category], [isActive]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [JournalEntry_organizationId_branchId_entryDate_idx] ON [dbo].[JournalEntry]([organizationId], [branchId], [entryDate]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [JournalLine_organizationId_accountId_idx] ON [dbo].[JournalLine]([organizationId], [accountId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [BankAccount_organizationId_branchId_isActive_idx] ON [dbo].[BankAccount]([organizationId], [branchId], [isActive]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [BankStatementLine_organizationId_branchId_transactionDate_status_idx] ON [dbo].[BankStatementLine]([organizationId], [branchId], [transactionDate], [status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [DepartmentBudget_organizationId_branchId_fiscalYear_isActive_idx] ON [dbo].[DepartmentBudget]([organizationId], [branchId], [fiscalYear], [isActive]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [GrantFund_organizationId_branchId_status_idx] ON [dbo].[GrantFund]([organizationId], [branchId], [status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [GrantTransaction_organizationId_branchId_grantFundId_transactionDate_idx] ON [dbo].[GrantTransaction]([organizationId], [branchId], [grantFundId], [transactionDate]);
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [Expense_organizationId_branchId_date_idx] ON [dbo].[Expense]([organizationId], [branchId], [date]);
@@ -1661,6 +1886,36 @@ ALTER TABLE [dbo].[AssignmentSubmission] ADD CONSTRAINT [AssignmentSubmission_as
 ALTER TABLE [dbo].[FeeInstallment] ADD CONSTRAINT [FeeInstallment_feePlanId_fkey] FOREIGN KEY ([feePlanId]) REFERENCES [dbo].[FeePlan]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE [dbo].[FeeRefund] ADD CONSTRAINT [FeeRefund_paymentId_fkey] FOREIGN KEY ([paymentId]) REFERENCES [dbo].[FeePayment]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[LedgerAccount] ADD CONSTRAINT [LedgerAccount_branchId_fkey] FOREIGN KEY ([branchId]) REFERENCES [dbo].[Branch]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[LedgerAccount] ADD CONSTRAINT [LedgerAccount_parentId_fkey] FOREIGN KEY ([parentId]) REFERENCES [dbo].[LedgerAccount]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[JournalLine] ADD CONSTRAINT [JournalLine_journalEntryId_fkey] FOREIGN KEY ([journalEntryId]) REFERENCES [dbo].[JournalEntry]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[JournalLine] ADD CONSTRAINT [JournalLine_accountId_fkey] FOREIGN KEY ([accountId]) REFERENCES [dbo].[LedgerAccount]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[BankAccount] ADD CONSTRAINT [BankAccount_branchId_fkey] FOREIGN KEY ([branchId]) REFERENCES [dbo].[Branch]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[BankAccount] ADD CONSTRAINT [BankAccount_ledgerAccountId_fkey] FOREIGN KEY ([ledgerAccountId]) REFERENCES [dbo].[LedgerAccount]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[BankStatementLine] ADD CONSTRAINT [BankStatementLine_bankAccountId_fkey] FOREIGN KEY ([bankAccountId]) REFERENCES [dbo].[BankAccount]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[BankStatementLine] ADD CONSTRAINT [BankStatementLine_matchedJournalLineId_fkey] FOREIGN KEY ([matchedJournalLineId]) REFERENCES [dbo].[JournalLine]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[GrantTransaction] ADD CONSTRAINT [GrantTransaction_grantFundId_fkey] FOREIGN KEY ([grantFundId]) REFERENCES [dbo].[GrantFund]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE [dbo].[Payslip] ADD CONSTRAINT [Payslip_payrollRunId_fkey] FOREIGN KEY ([payrollRunId]) REFERENCES [dbo].[PayrollRun]([id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
@@ -1720,4 +1975,3 @@ END;
 THROW
 
 END CATCH
-

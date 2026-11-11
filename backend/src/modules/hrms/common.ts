@@ -85,13 +85,16 @@ export const ONBOARDING_TASKS: { key: string; title: string; category: string; t
 export async function createOnboardingTasks(tx: Tx, ctx: RequestContext, staffId: string, staffType: string, done: string[] = []) {
   const existing = new Set((await tx.onboardingTask.findMany({ where: { staffId }, select: { taskKey: true } })).map((t) => t.taskKey));
   const tasks = ONBOARDING_TASKS.filter((t) => !t.teachingOnly || staffType === 'TEACHING');
+  let created = 0;
   for (const [i, t] of tasks.entries()) {
     if (existing.has(t.key)) continue;
     const isDone = done.includes(t.key);
     await tx.onboardingTask.create({
       data: { organizationId: ctx.organizationId, staffId, taskKey: t.key, title: t.title, category: t.category, sortOrder: i + 1, done: isDone, doneAt: isDone ? new Date() : null, doneById: isDone ? ctx.userId : null },
     });
+    created += 1;
   }
+  return created;
 }
 
 export const toMonthStart = (month: string) => new Date(`${month}-01T00:00:00Z`);

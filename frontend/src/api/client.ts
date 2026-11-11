@@ -49,6 +49,33 @@ async function send(method: string, path: string, body: unknown, retry: boolean,
   return data;
 }
 
+async function sendFile(method: string, path: string, file?: File, retry = true): Promise<Blob | unknown> {
+  const headers: Record<string, string> = { accept: method === "GET" ? "application/pdf" : "application/json" };
+  if (file) {
+    headers["content-type"] = "application/pdf";
+    headers["x-file-name"] = encodeURIComponent(file.name);
+  }
+  if (accessToken) headers.authorization = `Bearer ${accessToken}`;
+  if (branchId) headers["x-branch-id"] = branchId;
+
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { method, headers, body: file, credentials: "same-origin" });
+  } catch {
+    throw new ApiError(0, "NETWORK", "Cannot reach the server. Check that the backend is running and try again.");
+  }
+  if (res.status === 401 && retry && !path.startsWith("/auth/")) {
+    if (await refreshSession()) return sendFile(method, path, file, false);
+    onSignedOut?.();
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    const data = (text ? safeJson(text) : null) as { code?: string; message?: string; details?: unknown } | null;
+    throw new ApiError(res.status, data?.code ?? "ERROR", data?.message ?? `Request failed (${res.status})`, data?.details);
+  }
+  return method === "GET" ? res.blob() : res.json();
+}
+
 function safeJson(text: string) {
   try {
     return JSON.parse(text);
@@ -76,6 +103,8 @@ export function refreshSession(): Promise<boolean> {
 
 export const api = {
   get: <T>(path: string) => send("GET", path, undefined, true) as Promise<T>,
+  getBlob: (path: string) => sendFile("GET", path) as Promise<Blob>,
+  uploadPdf: <T>(path: string, file: File) => sendFile("PUT", path, file) as Promise<T>,
   post: <T>(path: string, body?: unknown, opts?: Options) => send("POST", path, body ?? {}, true, opts) as Promise<T>,
   put: <T>(path: string, body?: unknown) => send("PUT", path, body ?? {}, true) as Promise<T>,
   patch: <T>(path: string, body?: unknown) => send("PATCH", path, body ?? {}, true) as Promise<T>,

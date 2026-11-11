@@ -12,11 +12,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { BookOpen, ArrowUpCircle, ArrowDownCircle, Clock, IndianRupee, Search } from "lucide-react";
+import { BookOpen, ArrowUpCircle, ArrowDownCircle, Clock, IndianRupee, Search, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { daysFromToday, today } from "@/lib/dates";
 import {
-  FINE_PER_DAY, LOAN_DAYS, availableCopies, issueBook, loanFine, loanStatus, returnBook, useBooks, useLoans,
+  FINE_PER_DAY, LOAN_DAYS, availableCopies, issueBook, issueDigitalBook, loanFine, loanStatus, returnBook,
+  returnDigitalBook, useBooks, useDigitalLoans, useLoans,
 } from "@/store/library";
 import { findStudentByLogin } from "@/store/session";
 import { useStudents } from "@/store/students";
@@ -25,6 +26,7 @@ import type { LoanStatus } from "@/types/library";
 export function LibraryIssueReturn() {
   const books = useBooks();
   const loans = useLoans();
+  const digitalLoans = useDigitalLoans();
   const { students } = useStudents();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -33,8 +35,14 @@ export function LibraryIssueReturn() {
   const [issueDate, setIssueDate] = useState(today());
   const [dueDate, setDueDate] = useState(daysFromToday(LOAN_DAYS));
   const [returnQuery, setReturnQuery] = useState("");
+  const [digitalStudentId, setDigitalStudentId] = useState("");
+  const [digitalBookId, setDigitalBookId] = useState("");
+  const [digitalIssueDate, setDigitalIssueDate] = useState(today());
+  const [digitalDueDate, setDigitalDueDate] = useState(daysFromToday(LOAN_DAYS));
+  const [digitalSearch, setDigitalSearch] = useState("");
 
   const issueStudent = findStudentByLogin(issueStudentId);
+  const digitalStudent = findStudentByLogin(digitalStudentId);
 
   // loans joined with book + student details
   const rows = loans.map((l) => {
@@ -66,6 +74,17 @@ export function LibraryIssueReturn() {
   const returnMatches = rq
     ? issuedBooks.filter((r) => r.isbn.toLowerCase() === rq || String(r.bookId) === rq || r.rollNo.toLowerCase() === rq || r.bookTitle.toLowerCase().includes(rq))
     : [];
+  const activeDigitalLoans = digitalLoans
+    .filter((loan) => !loan.returnDate)
+    .map((loan) => ({
+      ...loan,
+      bookTitle: books.find((book) => book.id === loan.bookId)?.title ?? "Deleted book",
+      studentName: students.find((student) => student.id === loan.studentId)?.name ?? "Former student",
+      rollNo: students.find((student) => student.id === loan.studentId)?.rollNo ?? "—",
+      className: students.find((student) => student.id === loan.studentId)?.class ?? "—",
+    }))
+    .filter((loan) => !digitalSearch || `${loan.bookTitle} ${loan.studentName} ${loan.rollNo}`.toLowerCase().includes(digitalSearch.toLowerCase()))
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
   const handleIssueBook = () => {
     if (!issueStudent) {
@@ -92,6 +111,25 @@ export function LibraryIssueReturn() {
     setReturnQuery("");
   };
 
+  const handleIssueDigitalBook = () => {
+    if (!digitalStudent) {
+      toast.error("Enter a valid student roll number or admission number");
+      return;
+    }
+    if (!digitalBookId) {
+      toast.error("Please choose a digital book");
+      return;
+    }
+    const error = issueDigitalBook(Number(digitalBookId), digitalStudent.id, digitalIssueDate, digitalDueDate);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success(`PDF access issued to ${digitalStudent.name}`);
+    setDigitalStudentId("");
+    setDigitalBookId("");
+  };
+
   const getStatusBadge = (status: LoanStatus) => {
     if (status === "active") {
       return <Badge variant="default" className="bg-blue-600">Active</Badge>;
@@ -109,11 +147,13 @@ export function LibraryIssueReturn() {
       </div>
 
       <Tabs defaultValue="issue" className="w-full">
-        <TabsList>
+        <TabsList className="flex h-auto flex-wrap justify-start gap-1">
           <TabsTrigger value="issue">Issue Book</TabsTrigger>
           <TabsTrigger value="return">Return Book</TabsTrigger>
           <TabsTrigger value="issued">Issued Books ({issuedBooks.length})</TabsTrigger>
           <TabsTrigger value="history">Return History</TabsTrigger>
+          <TabsTrigger value="digital-issue">Issue Digital PDF</TabsTrigger>
+          <TabsTrigger value="digital-access">Digital Access ({activeDigitalLoans.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="issue" className="mt-6">
@@ -170,6 +210,71 @@ export function LibraryIssueReturn() {
               </Button>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="digital-issue" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Issue Digital PDF</CardTitle>
+              <p className="text-sm text-muted-foreground">Digital access is separate from hard-copy circulation and does not use physical stock.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Student Roll No. / Admission No.</Label>
+                  <Input placeholder="Enter student roll or admission number" value={digitalStudentId} onChange={(e) => setDigitalStudentId(e.target.value)} />
+                  {digitalStudentId && <p className={`text-xs ${digitalStudent ? "text-green-600" : "text-red-600"}`}>{digitalStudent ? `${digitalStudent.name} · ${digitalStudent.class}` : "No student found"}</p>}
+                </div>
+                <div className="space-y-2">
+                  <Label>Digital book</Label>
+                  <Select value={digitalBookId} onValueChange={setDigitalBookId}>
+                    <SelectTrigger><SelectValue placeholder="Choose an uploaded PDF" /></SelectTrigger>
+                    <SelectContent>
+                      {books.filter((book) => book.pdfFileName).map((book) => (
+                        <SelectItem key={book.id} value={String(book.id)}>{book.title} · PDF</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Issue Date</Label>
+                  <Input type="date" value={digitalIssueDate} onChange={(e) => setDigitalIssueDate(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Due Date</Label>
+                  <Input type="date" value={digitalDueDate} onChange={(e) => setDigitalDueDate(e.target.value)} />
+                </div>
+              </div>
+              <Button onClick={handleIssueDigitalBook} className="w-full gap-2"><FileText className="h-4 w-4" />Issue PDF Access</Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="digital-access" className="mt-6">
+          <Card className="mb-4">
+            <CardContent className="p-4">
+              <Input placeholder="Search digital issues by book, student or roll number..." value={digitalSearch} onChange={(e) => setDigitalSearch(e.target.value)} />
+            </CardContent>
+          </Card>
+          <div className="space-y-3">
+            {activeDigitalLoans.map((loan) => (
+              <Card key={loan.id}>
+                <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="font-semibold text-foreground">{loan.bookTitle}</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">{loan.studentName} · Roll {loan.rollNo} · {loan.className}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Issued {loan.issueDate} · Due {loan.dueDate}</p>
+                  </div>
+                  <Button variant="outline" className="gap-2" onClick={() => returnDigitalBook(loan.id)}>
+                    <ArrowDownCircle className="h-4 w-4" />Revoke PDF Access
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+            {activeDigitalLoans.length === 0 && (
+              <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">No active digital PDF issues found.</CardContent></Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="return" className="mt-6">

@@ -50,7 +50,7 @@ frontOfficeRouter.post('/enquiries', async (req, res) => {
   const branchId = targetBranch(ctx, 'frontoffice.manage', body.branchId);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const e = await tx.enquiry.create({ data: { organizationId: ctx.organizationId, branchId, studentName: body.studentName, parentName: body.parentName, phone: body.phone, email: body.email || null, gradeName: body.grade, source: body.source, status: 'NEW', notes: body.notes ?? null, followUpDate: body.followUpDate ?? null } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Enquiry', entityId: e.id, branchId, after: { studentName: body.studentName, source: body.source } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Enquiry', entityId: e.id, branchId, after: { status: e.status } });
     return enquiryOut(e);
   });
   res.status(201).json(out);
@@ -66,7 +66,15 @@ frontOfficeRouter.patch('/enquiries/:id', async (req, res) => {
     if (!before) throw notFound('Enquiry');
     if (!ctx.access.can('frontoffice.manage', before.branchId)) throw forbidden();
     const e = await tx.enquiry.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Enquiry', entityId: id, branchId: before.branchId, before: { status: before.status }, after: { ...body, followUpDate: toDateString(body.followUpDate ?? null) } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Enquiry', entityId: id, branchId: before.branchId,
+      before: { status: before.status, followUpDate: toDateString(before.followUpDate) },
+      after: {
+        status: body.status ?? before.status,
+        followUpDate: toDateString(body.followUpDate !== undefined ? body.followUpDate : before.followUpDate),
+        notesUpdated: body.notes !== undefined,
+      },
+    });
     return enquiryOut(e);
   });
   res.json(out);
@@ -98,7 +106,7 @@ frontOfficeRouter.post('/visitors', async (req, res) => {
   const branchId = targetBranch(ctx, 'frontoffice.manage', body.branchId);
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const v = await tx.visitor.create({ data: { organizationId: ctx.organizationId, branchId, name: body.name, phone: body.phone || null, purpose: body.purpose, toMeet: body.toMeet, people: body.people, inAt: new Date() } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Visitor', entityId: v.id, branchId, after: { name: body.name, purpose: body.purpose } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Visitor', entityId: v.id, branchId, after: { checkedIn: true } });
     return visitorOut(v);
   });
   res.status(201).json(out);
@@ -113,7 +121,9 @@ frontOfficeRouter.post('/visitors/:id/checkout', async (req, res) => {
     if (!v) throw notFound('Visitor');
     if (!ctx.access.can('frontoffice.manage', v.branchId)) throw forbidden();
     if (v.outAt) throw conflict('This visitor has already checked out.');
-    return visitorOut(await tx.visitor.update({ where: { id }, data: { outAt: new Date() } }));
+    const updated = await tx.visitor.update({ where: { id }, data: { outAt: new Date() } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Visitor', entityId: id, branchId: v.branchId, before: { checkedOut: false }, after: { checkedOut: true } });
+    return visitorOut(updated);
   });
   res.json(out);
 });

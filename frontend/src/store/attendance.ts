@@ -113,3 +113,37 @@ export function recordSubjectAttendance(
   );
   return true;
 }
+
+/**
+ * Saves a complete class register from the voice assistant. The API replaces every entry
+ * in a register, so callers must provide a status for every enrolled student.
+ */
+export async function recordVoiceAttendance(
+  className: string,
+  date: string,
+  subjectName: string,
+  statuses: Record<string, AttendanceStatus>,
+): Promise<boolean> {
+  const plan = getClassTimetable(dayOfWeekOf(date))[className] ?? [];
+  const period = plan.find((p) => p.subjectName === subjectName);
+  if (!period) return false;
+
+  const entries = Object.entries(statuses).map(([studentId, status]) => ({ studentId, status }));
+  if (!entries.length) return false;
+
+  const result = await mutate(
+    attendanceStore,
+    (records) => {
+      const existing = records.find((r) => r.className === className && r.date === date);
+      const day = existing ?? { date, className, periods: plan.map((p) => ({ ...p, entries: [] })) };
+      const updated = {
+        ...day,
+        periods: day.periods.map((p) => (p.periodNo === period.periodNo ? { ...p, entries } : p)),
+      };
+      return existing ? records.map((r) => (r === existing ? updated : r)) : [...records, updated];
+    },
+    () => putPeriod(className, date, { ...period, entries }),
+    { reload: true },
+  );
+  return result !== undefined;
+}

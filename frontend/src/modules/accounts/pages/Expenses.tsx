@@ -13,7 +13,7 @@ import { today } from "@/lib/dates";
 import { downloadCsv } from "@/store/inventory";
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS, addExpense, inr, monthLabel, monthOf, removeExpense, useExpenses } from "@/store/finance";
 
-const empty = { date: today(), category: "", description: "", amount: "", paidTo: "", method: PAYMENT_METHODS[0] };
+const empty = { date: today(), category: "", description: "", amount: "", paidTo: "", department: "", method: PAYMENT_METHODS[0] };
 
 export function Expenses() {
   const expenses = useExpenses();
@@ -34,7 +34,7 @@ export function Expenses() {
       toast.error("Category, description and a positive amount are required");
       return;
     }
-    addExpense({ ...form, description: form.description.trim(), paidTo: form.paidTo.trim(), amount });
+    addExpense({ ...form, description: form.description.trim(), paidTo: form.paidTo.trim(), department: form.department.trim() || undefined, amount });
     toast.success("Expense recorded");
     setOpen(false);
     setForm(empty);
@@ -112,6 +112,7 @@ export function Expenses() {
             <div className="space-y-2 sm:col-span-2"><Label>Description</Label><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Generator servicing" /></div>
             <div className="space-y-2"><Label>Amount (₹)</Label><Input type="number" min={1} value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
             <div className="space-y-2"><Label>Paid to</Label><Input value={form.paidTo} onChange={(e) => setForm({ ...form, paidTo: e.target.value })} /></div>
+            <div className="space-y-2 sm:col-span-2"><Label>Department (optional, for budget reporting)</Label><Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="e.g. Computer Science" /></div>
             <div className="space-y-2">
               <Label>Method</Label>
               <Select value={form.method} onValueChange={(v) => setForm({ ...form, method: v })}>

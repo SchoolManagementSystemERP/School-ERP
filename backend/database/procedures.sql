@@ -3,6 +3,16 @@
 SET QUOTED_IDENTIFIER ON;
 GO
 
+CREATE OR ALTER TRIGGER dbo.TR_AuditLog_Immutable
+ON dbo.AuditLog
+INSTEAD OF UPDATE, DELETE
+AS
+BEGIN
+  SET NOCOUNT ON;
+  THROW 51000, 'AuditLog records are immutable.', 1;
+END;
+GO
+
 -- ── Maintenance ──────────────────────────────────────────────────────────────
 -- Removes sign-in material nobody can use any more and refreshes optimizer statistics.
 -- Scheduled weekly by maintenance/install-backup-tasks.ps1. Runs as an administrator, so it

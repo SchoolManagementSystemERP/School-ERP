@@ -1,4 +1,4 @@
-import { BarChart3, FileInput, FileSpreadsheet, LayoutDashboard, Receipt, Wallet, WalletCards } from "lucide-react";
+import { BarChart3, BookOpen, FileInput, FileSpreadsheet, Landmark, LayoutDashboard, Receipt, Wallet, WalletCards } from "lucide-react";
 import { AppShell, type NavGroup } from "./AppShell";
 
 const nav: NavGroup[] = [
@@ -8,6 +8,13 @@ const nav: NavGroup[] = [
     items: [
       { name: "Fee Collection", href: "/accountant/fees", icon: Wallet },
       { name: "Fee Structure", href: "/accountant/fee-structure", icon: FileSpreadsheet },
+    ],
+  },
+  {
+    label: "Accounting",
+    items: [
+      { name: "General Ledger", href: "/accountant/ledger", icon: BookOpen },
+      { name: "Banking & Controls", href: "/accountant/operations", icon: Landmark },
     ],
   },
   {

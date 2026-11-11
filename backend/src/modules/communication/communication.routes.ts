@@ -108,7 +108,7 @@ communicationRouter.post('/announcements', async (req, res) => {
         audiences: { create: body.audience.map((x) => ({ organizationId: ctx.organizationId, audienceType: x.type, sectionId: x.sectionId ?? null })) },
       },
     });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Announcement', entityId: a.id, branchId, after: { title: body.title, audience: body.audience } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Announcement', entityId: a.id, branchId, after: { category: a.category, priority: a.priority, audiences: body.audience.map((x) => x.type) } });
     return { id: a.id, createdAt: a.createdAt.toISOString() };
   });
   res.status(201).json(out);
@@ -125,7 +125,7 @@ communicationRouter.delete('/announcements/:id', async (req, res) => {
     if (a.createdById !== ctx.userId && !manager) throw forbidden();
     await tx.announcementAudience.deleteMany({ where: { announcementId: id } });
     await tx.announcement.delete({ where: { id } });
-    await audit(tx, ctx, { action: 'DELETE', entity: 'Announcement', entityId: id, branchId: a.branchId, before: { title: a.title } });
+    await audit(tx, ctx, { action: 'DELETE', entity: 'Announcement', entityId: id, branchId: a.branchId, before: { category: a.category, priority: a.priority } });
   });
   res.status(204).end();
 });
@@ -232,6 +232,7 @@ communicationRouter.post('/messages', async (req, res) => {
     } else if (!ctx.access.can('messages.send', branchId)) throw forbidden();
 
     const m = await tx.message.create({ data: { organizationId: ctx.organizationId, fromUserId: ctx.userId, toUserId, aboutStudentId, subject: body.subject, body: body.body } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Message', entityId: m.id, branchId, after: { sent: true } });
     return { id: m.id, sentAt: m.sentAt.toISOString() };
   });
   res.status(201).json(out);
@@ -242,9 +243,15 @@ communicationRouter.post('/messages/:id/read', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
   await withTenant(ctx.organizationId, async (tx) => {
-    const m = await tx.message.findUnique({ where: { id }, select: { toUserId: true, readAt: true } });
+    const m = await tx.message.findUnique({ where: { id }, select: { toUserId: true, readAt: true, aboutStudentId: true } });
     if (!m || m.toUserId !== ctx.userId) throw notFound('Message');
-    if (!m.readAt) await tx.message.update({ where: { id }, data: { readAt: new Date() } });
+    if (!m.readAt) {
+      const aboutStudent = m.aboutStudentId ? await tx.student.findUnique({ where: { id: m.aboutStudentId }, select: { branchId: true } }) : null;
+      const recipient = aboutStudent ? null : await tx.staff.findFirst({ where: { userId: m.toUserId }, select: { branchId: true } })
+        ?? await tx.student.findFirst({ where: { userId: m.toUserId }, select: { branchId: true } });
+      await tx.message.update({ where: { id }, data: { readAt: new Date() } });
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'Message', entityId: id, branchId: aboutStudent?.branchId ?? recipient?.branchId, before: { read: false }, after: { read: true } });
+    }
   });
   res.json({ ok: true });
 });

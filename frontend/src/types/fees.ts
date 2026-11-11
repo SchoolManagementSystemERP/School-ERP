@@ -1,9 +1,17 @@
 export interface FeePayment {
   id: number;
   studentId: number;
+  installmentId?: string;
+  feeHead?: string;
+  receiptNo?: string;
   /** 1-based installment number */
   installment: number;
   amount: number;
+  /** Amount returned after partial or full refunds. */
+  refundedAmount?: number;
+  /** Collected amount after refunds. */
+  netAmount?: number;
+  status?: string;
   lateFee: number;
   method: string;
   txnId: string;

@@ -53,13 +53,26 @@ const ROLE_PORTAL: [string, Role][] = [
 ];
 
 export interface MeResponse {
-  user: { id: string; username: string; name: string; mustChangePassword: boolean };
+  user: {
+    id: string;
+    username: string;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    mustChangePassword: boolean;
+    lastLoginAt: string | null;
+  };
   organization: { id: string; name: string; subdomain: string };
-  memberships: { role: { code: string; name: string }; scopeType: string; branch: { id: string } | null }[];
+  memberships: {
+    role: { code: string; name: string };
+    scopeType: string;
+    region?: { id: string; name: string | null } | null;
+    branch: { id: string; code?: string | null; name?: string | null } | null;
+  }[];
   organizationPermissions: string[];
   branches: { id: string; code: string; name: string; students: number; permissions: string[] }[];
   staff: { id: string; employeeCode: string; branchId: string; department: string | null; staffType: string } | null;
-  students: { id: string; admissionNo: string; name: string; relation: "SELF" | "CHILD" }[];
+  students: { id: string; admissionNo: string; name: string; branchId: string; relation: "SELF" | "CHILD" }[];
 }
 
 export interface AuthState {

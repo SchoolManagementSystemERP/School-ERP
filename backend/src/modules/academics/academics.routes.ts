@@ -594,6 +594,10 @@ academicsRouter.post('/assignments/:id/submissions', async (req, res) => {
     const s = prev
       ? await tx.assignmentSubmission.update({ where: { id: prev.id }, data })
       : await tx.assignmentSubmission.create({ data: { organizationId: ctx.organizationId, assignmentId: id, studentId: body.studentId, ...data } });
+    await audit(tx, ctx, {
+      action: prev ? 'UPDATE' : 'CREATE', entity: 'AssignmentSubmission', entityId: s.id, branchId: a.branchId,
+      before: prev ? { submitted: true } : undefined, after: { submitted: true },
+    });
     return { studentId: s.studentId, submittedAt: toDateString(s.submittedAt), fileName: body.fileName };
   });
   res.status(201).json(out);
@@ -613,7 +617,10 @@ academicsRouter.patch('/assignments/:id/submissions/:studentId', async (req, res
     const s = await tx.assignmentSubmission.findUnique({ where: { assignmentId_studentId: { assignmentId: id, studentId } } });
     if (!s) throw notFound('Submission');
     await tx.assignmentSubmission.update({ where: { id: s.id }, data: { marksObtained: body.marksObtained, feedback: body.feedback ?? null, gradedById: ctx.userId } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'AssignmentSubmission', entityId: s.id, branchId: a.branchId, after: body });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'AssignmentSubmission', entityId: s.id, branchId: a.branchId,
+      after: { marksObtained: body.marksObtained, feedbackUpdated: body.feedback !== undefined },
+    });
   });
   res.json({ ok: true });
 });
@@ -684,7 +691,9 @@ academicsRouter.post('/notes/:id/download', async (req, res) => {
     if (!n) throw notFound('Note');
     const scope = await readScope(tx, ctx, 'students.read', year.id);
     if (!scope.branchIds.includes(n.branchId) || (scope.kind === 'self' && !scope.sectionIds.includes(n.sectionId))) throw notFound('Note');
-    return (await tx.studyNote.update({ where: { id }, data: { downloads: { increment: 1 } } })).downloads;
+    const updated = await tx.studyNote.update({ where: { id }, data: { downloads: { increment: 1 } } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'StudyNote', entityId: id, branchId: n.branchId, after: { downloads: updated.downloads } });
+    return updated.downloads;
   });
   res.json({ downloads });
 });

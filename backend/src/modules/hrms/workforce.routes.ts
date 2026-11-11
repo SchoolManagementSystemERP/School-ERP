@@ -50,7 +50,9 @@ workforceRouter.put('/hr/settings', async (req, res) => {
     const all = (parseJson(org.settings) ?? {}) as Record<string, unknown>;
     const hr = { ...DEFAULT_HR_SETTINGS, ...(all.hr as object), ...body } as HrSettings;
     await tx.organization.update({ where: { id: ctx.organizationId }, data: { settings: JSON.stringify({ ...all, hr }) } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'HrSettings', entityId: ctx.organizationId, after: body });
+    const writableBranches = ctx.access.branchesWith('staff.write');
+    const auditBranch = ctx.activeBranchId && writableBranches.includes(ctx.activeBranchId) ? ctx.activeBranchId : writableBranches[0];
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'HrSettings', entityId: ctx.organizationId, ...(auditBranch ? { branchId: auditBranch } : {}), after: body });
     return hr;
   });
   res.json(out);
@@ -83,7 +85,11 @@ workforceRouter.put('/staff/:id/compensation', async (req, res) => {
       },
     });
     await tx.onboardingTask.updateMany({ where: { staffId: id, taskKey: 'payroll', done: false }, data: { done: true, doneAt: new Date(), doneById: ctx.userId } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Compensation', entityId: id, branchId: staff.branchId, before: { compensation: parseJson(staff.compensation) ? 'set' : null, basicSalary: money(staff.basicSalary) }, after: { ctcAnnual: b.ctcAnnual } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Compensation', entityId: id, branchId: staff.branchId,
+      before: { compensationConfigured: !!parseJson(staff.compensation) },
+      after: { compensationConfigured: true, payrollEnrolled: true },
+    });
     return b;
   });
   res.json(out);
@@ -113,7 +119,10 @@ workforceRouter.patch('/staff/:id/bgv', async (req, res) => {
     if (body.status === 'CLEAR' || body.status === 'FLAGGED') {
       await tx.onboardingTask.updateMany({ where: { staffId: id, taskKey: 'bgv' }, data: { done: body.status === 'CLEAR', doneAt: new Date(), doneById: ctx.userId, note: body.note ?? (body.status === 'FLAGGED' ? 'Flagged — see HR' : null) } });
     }
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'BackgroundVerification', entityId: id, branchId: staff.branchId, before: { status: staff.bgvStatus }, after: body });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'BackgroundVerification', entityId: id, branchId: staff.branchId,
+      before: { status: staff.bgvStatus }, after: { status: body.status, noteProvided: !!body.note },
+    });
   });
   res.json({ ok: true });
 });
@@ -153,7 +162,8 @@ workforceRouter.post('/staff/:id/onboarding', async (req, res) => {
     const staff = await staffOrThrow(tx, id);
     assertHr(ctx, staff.branchId);
     const done = ['employee_code', ...(staff.userId ? ['login'] : []), ...(staff.compensation || staff.basicSalary ? ['payroll'] : [])];
-    await createOnboardingTasks(tx, ctx, id, staff.staffType, done);
+    const created = await createOnboardingTasks(tx, ctx, id, staff.staffType, done);
+    if (created) await audit(tx, ctx, { action: 'CREATE', entity: 'OnboardingChecklist', entityId: id, branchId: staff.branchId, after: { tasks: created, completedAtStart: done } });
   });
   res.status(201).json({ ok: true });
 });
@@ -169,6 +179,7 @@ workforceRouter.patch('/onboarding/:taskId', async (req, res) => {
     const staff = await staffOrThrow(tx, t.staffId);
     assertHr(ctx, staff.branchId);
     await tx.onboardingTask.update({ where: { id }, data: { done: body.done, doneAt: body.done ? new Date() : null, doneById: body.done ? ctx.userId : null, ...(body.note !== undefined ? { note: body.note } : {}) } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'OnboardingTask', entityId: id, branchId: staff.branchId, before: { done: t.done, noteProvided: !!t.note }, after: { done: body.done, noteProvided: body.note != null } });
   });
   res.json({ ok: true });
 });
@@ -262,7 +273,12 @@ workforceRouter.put('/staff-attendance', async (req, res) => {
       const data = { status: e.status, inTime: e.inTime ?? null, outTime: e.outTime ?? null, markedById: ctx.userId };
       await tx.staffAttendance.upsert({ where: { staffId_date: { staffId: e.staffId, date: body.date } }, update: data, create: { organizationId: ctx.organizationId, branchId, staffId: e.staffId, date: body.date, ...data } });
     }
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'StaffAttendance', entityId: toDateString(body.date)!, after: { entries: body.entries.length } });
+    await audit(tx, ctx, {
+      action: 'UPDATE',
+      entity: 'StaffAttendance',
+      entityId: toDateString(body.date)!,
+      after: { date: toDateString(body.date), statuses: Object.fromEntries(ATT.map((status) => [status, body.entries.filter((entry) => entry.status === status).length])) },
+    });
     return body.entries.length;
   });
   res.json({ date: toDateString(body.date), saved });
@@ -383,7 +399,7 @@ workforceRouter.patch('/expense-claims/:id', async (req, res) => {
     if ((await ownStaff(tx, ctx))?.id === c.staffId) throw forbidden('You cannot approve your own claim.');
     if (c.status !== 'SUBMITTED') throw conflict(`This claim was already ${c.status.toLowerCase()}.`);
     await tx.expenseClaim.update({ where: { id }, data: { status: body.status, remark: body.remark ?? null, decidedById: ctx.userId, decidedAt: new Date() } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'ExpenseClaim', entityId: id, branchId: c.branchId, before: { status: c.status }, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'ExpenseClaim', entityId: id, branchId: c.branchId, before: { status: c.status }, after: { status: body.status, remarkProvided: !!body.remark } });
   });
   res.json({ ok: true });
 });

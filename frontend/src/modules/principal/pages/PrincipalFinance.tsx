@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Search, Wallet, TrendingUp, AlertTriangle, CheckCircle, IndianRupee } from "lucide-react";
 import { toast } from "sonner";
-import { feeAccount, payInstallment, useFeePayments } from "@/store/fees";
+import { billedFeeHeadsAmount, feeInstallmentsForStudent, payFeeHeadInstallment, printFeeReceipt, refundFeePayment, type FeeHeadInstallmentOption, useFeePayments } from "@/store/fees";
 import { useClassRoster, useStudents } from "@/store/students";
 import { StatCard, toneFrom } from "@/components/common/StatCard";
+import { canAny } from "@/store/auth";
+import type { FeePayment } from "@/types/fees";
 
 type FeeStatus = "Paid" | "Pending" | "Overdue";
-type FeeRecord = { id: number; studentName: string; class: string; rollNo: string; amount: number; paid: number; due: number; status: FeeStatus; dueDate: string; nextInstallment?: { no: number; name: string; amount: number; lateFee: number }; };
+type FeeRecord = { id: number; studentName: string; class: string; rollNo: string; amount: number; paid: number; due: number; status: FeeStatus; dueDate: string; dueInstallments: FeeHeadInstallmentOption[]; nextInstallment?: FeeHeadInstallmentOption; latestPayment?: FeePayment; };
 
 const statuses = ["All", "Paid", "Pending", "Overdue"];
 
@@ -19,32 +21,70 @@ export function PrincipalFinance() {
   const { students } = useStudents();
   const payments = useFeePayments();
   const classes = ["All Classes", ...useClassRoster().classes];
+  const [selectedInstallments, setSelectedInstallments] = useState<Record<number, string>>({});
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const canRefund = canAny("fees.structure");
 
   const feeRecords: FeeRecord[] = students.map((st) => {
-    const acc = feeAccount(st, payments);
-    const next = acc.nextDue;
+    const dueInstallments = feeInstallmentsForStudent(st.id);
+    const next = dueInstallments[0];
+    const studentPayments = payments.filter((payment) => payment.studentId === st.id);
+    const paid = studentPayments.reduce((sum, payment) => sum + (payment.netAmount ?? payment.amount) + payment.lateFee, 0);
+    const latestPayment = [...studentPayments].sort((a, b) => b.date.localeCompare(a.date))[0];
+    const due = dueInstallments.reduce((sum, installment) => sum + installment.amount, 0);
+    const overdue = dueInstallments.some((installment) => installment.dueDate < new Date().toISOString().slice(0, 10));
     return {
       id: st.id,
       studentName: st.name,
       class: st.class,
       rollNo: st.rollNo,
-      amount: acc.total,
-      paid: acc.paid,
-      due: acc.pending,
-      status: acc.status,
+      amount: billedFeeHeadsAmount(st.id),
+      paid,
+      due,
+      status: due === 0 ? "Paid" : overdue ? "Overdue" : "Pending",
       dueDate: next?.dueDate ?? "—",
-      nextInstallment: next ? { no: next.no, name: next.name, amount: next.amount, lateFee: next.lateFee } : undefined,
+      dueInstallments,
+      nextInstallment: next,
+      latestPayment,
     };
   });
   const lateFeesCollected = payments.reduce((a, p) => a + p.lateFee, 0);
 
   const collect = async (r: FeeRecord) => {
     const st = students.find((x) => x.id === r.id);
-    if (!st || !r.nextInstallment) return;
-    if (!(await payInstallment(st, r.nextInstallment.no, "Cash"))) return;
-    toast.success(`${r.nextInstallment.name} collected from ${r.studentName}`, {
-      description: `₹${r.nextInstallment.amount.toLocaleString("en-IN")}${r.nextInstallment.lateFee ? ` + ₹${r.nextInstallment.lateFee} late fee` : ""} (cash)`,
+    const installment = r.dueInstallments.find((item) => item.id === selectedInstallments[r.id]) ?? r.nextInstallment;
+    if (!st || !installment) return;
+    if (!(await payFeeHeadInstallment(st, installment.id, paymentMethod))) return;
+    toast.success(`${installment.feeHead.replaceAll("_", " ")} · ${installment.name} collected from ${r.studentName}`, {
+      description: `₹${installment.amount.toLocaleString("en-IN")} (${paymentMethod})`,
     });
+  };
+  const refundLatest = async (r: FeeRecord) => {
+    if (!r.latestPayment) return;
+    const refundable = Math.max(0, r.latestPayment.amount - (r.latestPayment.refundedAmount ?? 0));
+    if (refundable <= 0) return;
+    const amountText = window.prompt(`Refund amount (maximum ₹${refundable.toLocaleString("en-IN")}):`, String(refundable));
+    if (amountText === null) return;
+    const amount = Number(amountText);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > refundable) {
+      toast.error("Enter a valid refund amount within the remaining refundable balance.");
+      return;
+    }
+    const reason = window.prompt(`Reason for refunding receipt ${r.latestPayment.receiptNo ?? ""}:`);
+    if (!reason?.trim()) return;
+    try {
+      await refundFeePayment(r.latestPayment, amount, reason.trim());
+      toast.success(`₹${amount.toLocaleString("en-IN")} refunded from receipt ${r.latestPayment.receiptNo ?? ""}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refund this fee payment");
+    }
+  };
+  const printLatestReceipt = async (payment: FeePayment) => {
+    try {
+      await printFeeReceipt(payment);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not open the fee receipt");
+    }
   };
   const [selectedClass, setSelectedClass] = useState("All Classes");
   const [selectedStatus, setSelectedStatus] = useState("All");
@@ -88,7 +128,7 @@ export function PrincipalFinance() {
 
       <Card>
         <CardContent className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-foreground/40" />
               <Input placeholder="Search student…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
@@ -100,6 +140,10 @@ export function PrincipalFinance() {
             <Select value={selectedStatus} onValueChange={setSelectedStatus}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>{statuses.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+            </Select>
+            <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{["Cash", "Cheque", "Demand Draft", "POS", "UPI", "Card", "Net Banking"].map((method) => <SelectItem key={method} value={method}>{method}</SelectItem>)}</SelectContent>
             </Select>
           </div>
         </CardContent>
@@ -116,7 +160,7 @@ export function PrincipalFinance() {
                     <h4 className="font-semibold text-foreground">{r.studentName}</h4>
                     <Badge variant="outline" className="font-mono text-xs">{r.rollNo}</Badge>
                   </div>
-                  <p className="text-sm text-foreground/60">{r.class} • {r.nextInstallment ? `${r.nextInstallment.name} due ${r.dueDate}` : "All installments paid"}</p>
+                  <p className="text-sm text-foreground/60">{r.class} • {r.nextInstallment ? `${r.nextInstallment.feeHead.replaceAll("_", " ")} · ${r.nextInstallment.name} due ${r.dueDate}` : "All installments paid"}</p>
                 </div>
                 <div className="flex items-center gap-6 shrink-0">
                   <div className="text-right hidden sm:block">
@@ -133,8 +177,21 @@ export function PrincipalFinance() {
                   </div>
                   <Badge className={statusBadge(r.status)}>{r.status}</Badge>
                   {r.nextInstallment && (
-                    <Button size="sm" variant="outline" onClick={() => collect(r)}>Collect</Button>
+                    <div className="flex items-center gap-2">
+                      {r.dueInstallments.length > 1 && <Select
+                        value={selectedInstallments[r.id] ?? r.dueInstallments[0].id}
+                        onValueChange={(value) => setSelectedInstallments((current) => ({ ...current, [r.id]: value }))}
+                      >
+                        <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                        <SelectContent>{r.dueInstallments.map((installment) => <SelectItem key={installment.id} value={installment.id}>
+                          {installment.feeHead.replaceAll("_", " ")} · {installment.name} · ₹{installment.amount.toLocaleString("en-IN")}
+                        </SelectItem>)}</SelectContent>
+                      </Select>}
+                      <Button size="sm" variant="outline" onClick={() => collect(r)}>Collect</Button>
+                    </div>
                   )}
+                  {r.latestPayment && <Button size="sm" variant="ghost" onClick={() => void printLatestReceipt(r.latestPayment!)}>Receipt</Button>}
+                  {canRefund && r.latestPayment && (r.latestPayment.refundedAmount ?? 0) < r.latestPayment.amount && <Button size="sm" variant="ghost" onClick={() => refundLatest(r)}>Refund latest</Button>}
                 </div>
               </div>
             ))}

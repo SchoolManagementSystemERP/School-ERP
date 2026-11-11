@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { z } from 'zod';
 import type { RequestContext } from '../../auth/access.js';
 import { targetBranch } from '../../auth/access.js';
@@ -51,21 +51,30 @@ const bookInput = z.object({
   branchId: uuid.optional(),
 });
 
-/** GET /library — books and this year's loans (with fines). */
+/** GET /library — books and this year's physical and digital loans. */
 facilitiesRouter.get('/library', async (req, res) => {
   const ctx = ctxOf(req);
   const branchIds = readable(ctx, 'library.manage');
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const year = await currentYear(tx);
-    const [books, loans, settings] = await Promise.all([
-      tx.book.findMany({ where: { branchId: { in: branchIds } }, orderBy: { title: 'asc' } }),
-      tx.bookLoan.findMany({ where: { branchId: { in: branchIds }, OR: [{ returnDate: null }, { issueDate: { gte: year.startDate } }] }, orderBy: { issueDate: 'desc' } }),
+    const [books, loans, digitalLoans, settings] = await Promise.all([
+      tx.book.findMany({
+        where: { branchId: { in: branchIds } },
+        orderBy: { title: 'asc' },
+        select: {
+          id: true, organizationId: true, branchId: true, title: true, author: true, isbn: true, category: true,
+          publisher: true, edition: true, publishYear: true, totalCopies: true, rack: true, pdfFileName: true, pdfSizeBytes: true,
+        },
+      }),
+      tx.bookLoan.findMany({ where: { branchId: { in: branchIds }, isDigital: false, OR: [{ returnDate: null }, { issueDate: { gte: year.startDate } }] }, orderBy: { issueDate: 'desc' } }),
+      tx.bookLoan.findMany({ where: { branchId: { in: branchIds }, isDigital: true, OR: [{ returnDate: null }, { issueDate: { gte: year.startDate } }] }, orderBy: { issueDate: 'desc' } }),
       readSettings(tx, ctx.organizationId, 'library'),
     ]);
     return {
       finePerDay: Number(settings.section?.finePerDay ?? 5), loanDays: Number(settings.section?.loanDays ?? 14),
       books: books.map(({ organizationId: _o, ...b }) => b),
       loans: loans.map((l) => ({ id: l.id, bookId: l.bookId, studentId: l.studentId, staffId: l.staffId, issueDate: toDateString(l.issueDate), dueDate: toDateString(l.dueDate), returnDate: toDateString(l.returnDate), finePaid: money(l.finePaid) })),
+      digitalLoans: digitalLoans.map((l) => ({ id: l.id, bookId: l.bookId, studentId: l.studentId, issueDate: toDateString(l.issueDate), dueDate: toDateString(l.dueDate), returnDate: toDateString(l.returnDate) })),
     };
   });
   res.json(out);
@@ -78,7 +87,13 @@ facilitiesRouter.post('/library/books', async (req, res) => {
   const branchId = targetBranch(ctx, 'library.manage', body.branchId);
   const book = await withTenant(ctx.organizationId, async (tx) => {
     const { branchId: _b, ...data } = body;
-    const b = await tx.book.create({ data: { ...data, organizationId: ctx.organizationId, branchId } });
+    const b = await tx.book.create({
+      data: { ...data, organizationId: ctx.organizationId, branchId },
+      select: {
+        id: true, organizationId: true, branchId: true, title: true, author: true, isbn: true, category: true, publisher: true, edition: true,
+        publishYear: true, totalCopies: true, rack: true, pdfFileName: true, pdfSizeBytes: true,
+      },
+    });
     await audit(tx, ctx, { action: 'CREATE', entity: 'Book', entityId: b.id, branchId, after: { title: b.title } });
     return b;
   });
@@ -91,15 +106,21 @@ facilitiesRouter.patch('/library/books/:id', async (req, res) => {
   const id = idParam(req);
   const body = forPatch(bookInput.omit({ branchId: true })).parse(req.body);
   const book = await withTenant(ctx.organizationId, async (tx) => {
-    const before = await tx.book.findUnique({ where: { id } });
+    const before = await tx.book.findUnique({ where: { id }, select: { id: true, branchId: true, title: true, totalCopies: true } });
     if (!before) throw notFound('Book');
     assertManage(ctx, 'library.manage', before.branchId);
     if (body.totalCopies !== undefined) {
-      const out = await tx.bookLoan.count({ where: { bookId: id, returnDate: null } });
+      const out = await tx.bookLoan.count({ where: { bookId: id, isDigital: false, returnDate: null } });
       if (body.totalCopies < out) throw badRequest(`${out} copies are on loan — the total cannot be less than that.`);
     }
-    const b = await tx.book.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Book', entityId: id, branchId: before.branchId, before: { title: before.title, totalCopies: before.totalCopies }, after: body });
+    const b = await tx.book.update({
+      where: { id }, data: body,
+      select: {
+        id: true, organizationId: true, branchId: true, title: true, author: true, isbn: true, category: true, publisher: true, edition: true,
+        publishYear: true, totalCopies: true, rack: true, pdfFileName: true, pdfSizeBytes: true,
+      },
+    });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Book', entityId: id, branchId: before.branchId, before: { title: before.title, totalCopies: before.totalCopies }, after: { title: b.title, totalCopies: b.totalCopies } });
     return b;
   });
   res.json(book);
@@ -110,10 +131,10 @@ facilitiesRouter.delete('/library/books/:id', async (req, res) => {
   const ctx = ctxOf(req);
   const id = idParam(req);
   await withTenant(ctx.organizationId, async (tx) => {
-    const b = await tx.book.findUnique({ where: { id } });
+    const b = await tx.book.findUnique({ where: { id }, select: { id: true, branchId: true, title: true } });
     if (!b) throw notFound('Book');
     assertManage(ctx, 'library.manage', b.branchId);
-    if (await tx.bookLoan.count({ where: { bookId: id, returnDate: null } })) throw badRequest('Return all issued copies before deleting this book.');
+    if (await tx.bookLoan.count({ where: { bookId: id, isDigital: false, returnDate: null } })) throw badRequest('Return all issued copies before deleting this book.');
     await tx.bookLoan.deleteMany({ where: { bookId: id } });
     await tx.book.delete({ where: { id } });
     await audit(tx, ctx, { action: 'DELETE', entity: 'Book', entityId: id, branchId: b.branchId, before: { title: b.title } });
@@ -127,20 +148,170 @@ facilitiesRouter.post('/library/loans', async (req, res) => {
   const body = z.object({ bookId: uuid, studentId: uuid, issueDate: dateOnly, dueDate: dateOnly }).parse(req.body);
   if (body.dueDate < body.issueDate) throw badRequest('The due date must be after the issue date.');
   const loan = await withTenant(ctx.organizationId, async (tx) => {
-    const book = await tx.book.findUnique({ where: { id: body.bookId } });
+    const book = await tx.book.findUnique({ where: { id: body.bookId }, select: { id: true, branchId: true, title: true, totalCopies: true } });
     if (!book) throw notFound('Book');
     assertManage(ctx, 'library.manage', book.branchId);
     const student = await tx.student.findUnique({ where: { id: body.studentId }, select: { branchId: true, status: true } });
     if (!student || student.branchId !== book.branchId) throw badRequest('This student is not in this branch.');
     if (student.status !== 'ACTIVE') throw badRequest('Books can be issued to current students only.');
-    const out = await tx.bookLoan.count({ where: { bookId: book.id, returnDate: null } });
+    const out = await tx.bookLoan.count({ where: { bookId: book.id, isDigital: false, returnDate: null } });
     if (out >= book.totalCopies) throw conflict(`No copies of “${book.title}” are available.`);
-    if (await tx.bookLoan.count({ where: { bookId: book.id, studentId: body.studentId, returnDate: null } })) throw conflict('This student already has this book.');
+    if (await tx.bookLoan.count({ where: { bookId: book.id, studentId: body.studentId, isDigital: false, returnDate: null } })) throw conflict('This student already has this book.');
     const l = await tx.bookLoan.create({ data: { organizationId: ctx.organizationId, branchId: book.branchId, bookId: book.id, studentId: body.studentId, issueDate: body.issueDate, dueDate: body.dueDate } });
     await audit(tx, ctx, { action: 'CREATE', entity: 'BookLoan', entityId: l.id, branchId: book.branchId, after: { book: book.title } });
     return { id: l.id, bookId: l.bookId, studentId: l.studentId, staffId: null, issueDate: toDateString(l.issueDate), dueDate: toDateString(l.dueDate), returnDate: null, finePaid: 0 };
   });
   res.status(201).json(loan);
+});
+
+/** POST /library/digital-loans — issue a PDF independently of physical copy availability. */
+facilitiesRouter.post('/library/digital-loans', async (req, res) => {
+  const ctx = ctxOf(req);
+  const body = z.object({ bookId: uuid, studentId: uuid, issueDate: dateOnly, dueDate: dateOnly }).parse(req.body);
+  if (body.dueDate < body.issueDate) throw badRequest('The due date must be after the issue date.');
+  const loan = await withTenant(ctx.organizationId, async (tx) => {
+    const book = await tx.book.findUnique({ where: { id: body.bookId }, select: { id: true, branchId: true, title: true, pdfFileName: true, pdfContent: true } });
+    if (!book) throw notFound('Book');
+    assertManage(ctx, 'library.manage', book.branchId);
+    if (!book.pdfFileName || !book.pdfContent) throw badRequest('Upload a PDF for this book before issuing digital access.');
+    const student = await tx.student.findUnique({ where: { id: body.studentId }, select: { branchId: true, status: true } });
+    if (!student || student.branchId !== book.branchId) throw badRequest('This student is not in this branch.');
+    if (student.status !== 'ACTIVE') throw badRequest('Digital books can be issued to current students only.');
+    if (await tx.bookLoan.count({ where: { bookId: book.id, studentId: body.studentId, isDigital: true, returnDate: null } })) {
+      throw conflict('This student already has active digital access to this book.');
+    }
+    const loan = await tx.bookLoan.create({
+      data: {
+        organizationId: ctx.organizationId, branchId: book.branchId, bookId: book.id, studentId: body.studentId,
+        isDigital: true, issueDate: body.issueDate, dueDate: body.dueDate,
+      },
+    });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'BookLoan', entityId: loan.id, branchId: book.branchId, after: { book: book.title, digital: true } });
+    return { id: loan.id, bookId: loan.bookId, studentId: loan.studentId, issueDate: toDateString(loan.issueDate), dueDate: toDateString(loan.dueDate), returnDate: null };
+  });
+  res.status(201).json(loan);
+});
+
+/** POST /library/digital-loans/:id/return — revoke digital access, without affecting physical loans. */
+facilitiesRouter.post('/library/digital-loans/:id/return', async (req, res) => {
+  const ctx = ctxOf(req);
+  const id = idParam(req);
+  const loan = await withTenant(ctx.organizationId, async (tx) => {
+    const before = await tx.bookLoan.findUnique({ where: { id } });
+    if (!before || !before.isDigital) throw notFound('Digital loan');
+    assertManage(ctx, 'library.manage', before.branchId);
+    if (before.returnDate) throw conflict('This digital access was already returned.');
+    const returnedAt = todayUtc();
+    const updated = await tx.bookLoan.update({ where: { id }, data: { returnDate: returnedAt } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'BookLoan', entityId: id, branchId: before.branchId, after: { returned: true, digital: true } });
+    return { id, returnDate: toDateString(updated.returnDate) };
+  });
+  res.json(loan);
+});
+
+const digitalBookStudent = z.object({ studentId: uuid });
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/** Uploads a private PDF for a book. The bytes are stored in the tenant-scoped Book row. */
+facilitiesRouter.put(
+  '/library/books/:id/pdf',
+  express.raw({ type: 'application/pdf', limit: MAX_PDF_BYTES }),
+  async (req, res) => {
+    const ctx = ctxOf(req);
+    const id = idParam(req);
+    if (!Buffer.isBuffer(req.body) || req.body.length < 5 || req.body.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw badRequest('Upload a valid PDF file.');
+    }
+    const encodedName = req.header('x-file-name');
+    let fileName: string;
+    try {
+      fileName = decodeURIComponent(encodedName ?? '');
+    } catch {
+      throw badRequest('The PDF file name is invalid.');
+    }
+    fileName = fileName.replace(/[^\w .()-]/g, '_').trim();
+    if (!fileName || fileName.length > 260 || !fileName.toLowerCase().endsWith('.pdf')) {
+      throw badRequest('The PDF file name must end in .pdf and be no longer than 260 characters.');
+    }
+    const book = await withTenant(ctx.organizationId, async (tx) => {
+      const before = await tx.book.findUnique({ where: { id }, select: { id: true, branchId: true, title: true } });
+      if (!before) throw notFound('Book');
+      assertManage(ctx, 'library.manage', before.branchId);
+      const updated = await tx.book.update({
+        where: { id },
+        data: { pdfFileName: fileName, pdfSizeBytes: req.body.length, pdfContent: req.body },
+        select: { id: true, pdfFileName: true, pdfSizeBytes: true },
+      });
+      await audit(tx, ctx, {
+        action: 'UPDATE', entity: 'Book', entityId: id, branchId: before.branchId,
+        before: { title: before.title }, after: { pdfFileName: updated.pdfFileName, pdfSizeBytes: updated.pdfSizeBytes },
+      });
+      return updated;
+    });
+    res.json(book);
+  },
+);
+
+/** Digital catalogue for a student or guardian; only loans for the selected linked student unlock a title. */
+facilitiesRouter.get('/library/digital-books', async (req, res) => {
+  const ctx = ctxOf(req);
+  const { studentId } = digitalBookStudent.parse(req.query);
+  const books = await withTenant(ctx.organizationId, async (tx) => {
+    const student = await tx.student.findFirst({
+      where: {
+        id: studentId,
+        OR: [{ userId: ctx.userId }, { guardians: { some: { guardian: { userId: ctx.userId } } } }],
+      },
+      select: { id: true, branchId: true },
+    });
+    if (!student) throw notFound('Student');
+    const rows = await tx.book.findMany({
+      where: { branchId: student.branchId, pdfFileName: { not: null } },
+      select: { id: true, title: true, author: true, category: true, pdfFileName: true, pdfSizeBytes: true },
+      orderBy: { title: 'asc' },
+    });
+    const issued = new Set((await tx.bookLoan.findMany({
+      where: { studentId: student.id, bookId: { in: rows.map((book) => book.id) }, isDigital: true, returnDate: null },
+      select: { bookId: true },
+    })).map((loan) => loan.bookId));
+    return rows.map((book) => ({ ...book, issued: issued.has(book.id) }));
+  });
+  res.json(books);
+});
+
+/** Streams a PDF only while the signed-in student's selected linked account has an active loan. */
+facilitiesRouter.get('/library/digital-books/:id/pdf', async (req, res) => {
+  const ctx = ctxOf(req);
+  const id = idParam(req);
+  const { studentId } = digitalBookStudent.parse(req.query);
+  const pdf = await withTenant(ctx.organizationId, async (tx) => {
+    const student = await tx.student.findFirst({
+      where: {
+        id: studentId,
+        OR: [{ userId: ctx.userId }, { guardians: { some: { guardian: { userId: ctx.userId } } } }],
+      },
+      select: { id: true },
+    });
+    if (!student) throw notFound('Student');
+    const book = await tx.book.findUnique({
+      where: { id },
+      select: { id: true, pdfFileName: true, pdfContent: true },
+    });
+    if (!book?.pdfFileName || !book.pdfContent) throw notFound('Digital book');
+    const loan = await tx.bookLoan.findFirst({
+      where: { bookId: id, studentId: student.id, isDigital: true, returnDate: null },
+      select: { id: true },
+    });
+    if (!loan) throw notFound('Digital book');
+    return { fileName: book.pdfFileName, content: book.pdfContent };
+  });
+  const safeName = pdf.fileName.replace(/["\\\r\n]/g, '_');
+  res.set({
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `inline; filename="${safeName}"`,
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  }).send(Buffer.from(pdf.content));
 });
 
 /** POST /library/loans/:id/return — records the return and the fine (days late × fine per day). */
@@ -150,6 +321,7 @@ facilitiesRouter.post('/library/loans/:id/return', async (req, res) => {
   const out = await withTenant(ctx.organizationId, async (tx) => {
     const l = await tx.bookLoan.findUnique({ where: { id } });
     if (!l) throw notFound('Loan');
+    if (l.isDigital) throw notFound('Loan');
     assertManage(ctx, 'library.manage', l.branchId);
     if (l.returnDate) throw conflict('This book was already returned.');
     const finePerDay = Number((await readSettings(tx, ctx.organizationId, 'library')).section?.finePerDay ?? 5);
@@ -227,7 +399,7 @@ facilitiesRouter.patch('/inventory/items/:id', async (req, res) => {
     assertManage(ctx, 'inventory.manage', before.branchId);
     if (body.sku && body.sku !== before.sku && (await tx.inventoryItem.count({ where: { branchId: before.branchId, sku: body.sku } }))) throw conflict(`SKU ${body.sku} is already used.`);
     const i = await tx.inventoryItem.update({ where: { id }, data: body });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'InventoryItem', entityId: id, branchId: before.branchId, before: { name: before.name }, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'InventoryItem', entityId: id, branchId: before.branchId, before: { name: before.name, category: before.category }, after: { name: i.name, category: i.category } });
     return itemOut(i, new Date());
   });
   res.json(out);
@@ -262,6 +434,7 @@ facilitiesRouter.post('/inventory/items/:id/movements', async (req, res) => {
     if (body.type === 'OUT' && body.quantity > i.quantity) throw badRequest(`Only ${i.quantity} ${i.unit} in stock.`);
     const updated = await tx.inventoryItem.update({ where: { id }, data: { quantity: { increment: body.type === 'IN' ? body.quantity : -body.quantity } } });
     const m = await tx.stockMovement.create({ data: { organizationId: ctx.organizationId, itemId: id, type: body.type, quantity: body.quantity, note: body.note ?? null, createdById: ctx.userId } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'StockMovement', entityId: m.id, branchId: i.branchId, after: { type: m.type, quantity: m.quantity } });
     return { item: itemOut(updated, m.createdAt), movement: { id: m.id, itemId: id, type: m.type, quantity: m.quantity, note: m.note, by: ctx.name, date: toDateString(m.createdAt) } };
   });
   res.status(201).json(out);
@@ -287,9 +460,10 @@ facilitiesRouter.put('/inventory/settings', async (req, res) => {
     lowStockAlerts: z.boolean(), criticalPercent: z.number().int().min(1).max(100),
   }).parse(req.body);
   await withTenant(ctx.organizationId, async (tx) => {
-    const { all } = await readSettings(tx, ctx.organizationId, 'inventory');
+    const { all, section } = await readSettings(tx, ctx.organizationId, 'inventory');
     await tx.organization.update({ where: { id: ctx.organizationId }, data: { settings: JSON.stringify({ ...all, inventory: body }) } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'InventorySettings', entityId: ctx.organizationId, after: { categories: body.categories.length } });
+    const previous = section as { categories?: unknown[] } | null;
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'InventorySettings', entityId: ctx.organizationId, before: { categories: previous?.categories?.length ?? 0 }, after: { categories: body.categories.length } });
   });
   res.json(body);
 });
@@ -324,13 +498,17 @@ async function driverFor(tx: Tx, ctx: RequestContext, branchId: string, name: st
   if (!name?.trim()) return null;
   const existing = await tx.staff.findFirst({ where: { branchId, name: name.trim(), status: { not: 'RESIGNED' } } });
   if (existing) {
-    if (phone && phone !== existing.phone) await tx.staff.update({ where: { id: existing.id }, data: { phone } });
+    if (phone && phone !== existing.phone) {
+      await tx.staff.update({ where: { id: existing.id }, data: { phone } });
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'Staff', entityId: existing.id, branchId, after: { driverContactUpdated: true } });
+    }
     return existing.id;
   }
   const count = await tx.staff.count({ where: { employeeCode: { startsWith: 'DRV' } } });
   let code = `DRV${String(count + 1).padStart(3, '0')}`;
   while (await tx.staff.count({ where: { employeeCode: code } })) code = `DRV${String(Number(code.slice(3)) + 1).padStart(3, '0')}`;
   const s = await tx.staff.create({ data: { organizationId: ctx.organizationId, branchId, employeeCode: code, name: name.trim(), phone: phone || null, staffType: 'NON_TEACHING', designation: 'Driver', department: 'Transport', status: 'ACTIVE' } });
+  await audit(tx, ctx, { action: 'CREATE', entity: 'Staff', entityId: s.id, branchId, after: { designation: 'Driver', staffType: 'NON_TEACHING' } });
   return s.id;
 }
 
@@ -348,7 +526,7 @@ facilitiesRouter.post('/transport/vehicles', async (req, res) => {
   const v = await withTenant(ctx.organizationId, async (tx) => {
     if (await tx.vehicle.count({ where: { registrationNo: body.registrationNo } })) throw conflict(`${body.registrationNo} is already registered.`);
     const created = await tx.vehicle.create({ data: { organizationId: ctx.organizationId, branchId, registrationNo: body.registrationNo, type: body.type, capacity: body.capacity, insuranceExpiry: body.insuranceExpiry, fitnessExpiry: body.fitnessExpiry, driverStaffId: await driverFor(tx, ctx, branchId, body.driverName, body.driverPhone) } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'Vehicle', entityId: created.id, branchId, after: { registrationNo: body.registrationNo } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Vehicle', entityId: created.id, branchId, after: { type: created.type, capacity: created.capacity } });
     return created;
   });
   res.status(201).json({ id: v.id });
@@ -367,7 +545,7 @@ facilitiesRouter.patch('/transport/vehicles/:id', async (req, res) => {
     if (cols.registrationNo && cols.registrationNo !== before.registrationNo && (await tx.vehicle.count({ where: { registrationNo: cols.registrationNo } }))) throw conflict(`${cols.registrationNo} is already registered.`);
     const driverStaffId = driverName !== undefined ? await driverFor(tx, ctx, before.branchId, driverName, driverPhone) : undefined;
     await tx.vehicle.update({ where: { id }, data: { ...cols, ...(driverStaffId !== undefined ? { driverStaffId } : {}) } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Vehicle', entityId: id, branchId: before.branchId, before: { registrationNo: before.registrationNo }, after: body });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Vehicle', entityId: id, branchId: before.branchId, before: { type: before.type, capacity: before.capacity }, after: { type: cols.type ?? before.type, capacity: cols.capacity ?? before.capacity, driverAssigned: driverName !== undefined } });
   });
   res.json({ ok: true });
 });
@@ -382,7 +560,7 @@ facilitiesRouter.delete('/transport/vehicles/:id', async (req, res) => {
     assertManage(ctx, 'transport.manage', v.branchId);
     await tx.transportRoute.updateMany({ where: { vehicleId: id }, data: { vehicleId: null } });
     await tx.vehicle.delete({ where: { id } });
-    await audit(tx, ctx, { action: 'DELETE', entity: 'Vehicle', entityId: id, branchId: v.branchId, before: { registrationNo: v.registrationNo } });
+    await audit(tx, ctx, { action: 'DELETE', entity: 'Vehicle', entityId: id, branchId: v.branchId, before: { type: v.type, capacity: v.capacity } });
   });
   res.status(204).end();
 });
@@ -418,7 +596,7 @@ facilitiesRouter.post('/transport/routes', async (req, res) => {
     if (body.vehicleId && !(await tx.vehicle.count({ where: { id: body.vehicleId, branchId } }))) throw badRequest('Unknown vehicle.');
     const created = await tx.transportRoute.create({ data: { organizationId: ctx.organizationId, branchId, name: body.name, vehicleId: body.vehicleId ?? null, monthlyFee: body.monthlyFee, pickupTime: body.pickupTime } });
     await setStops(tx, ctx, created.id, body.stops);
-    await audit(tx, ctx, { action: 'CREATE', entity: 'TransportRoute', entityId: created.id, branchId, after: { name: body.name, stops: body.stops } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'TransportRoute', entityId: created.id, branchId, after: { name: body.name, stopCount: body.stops.length } });
     return created;
   });
   res.status(201).json({ id: r.id });
@@ -437,7 +615,11 @@ facilitiesRouter.patch('/transport/routes/:id', async (req, res) => {
     const { stops, ...cols } = body;
     await tx.transportRoute.update({ where: { id }, data: cols });
     if (stops) await setStops(tx, ctx, id, stops);
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'TransportRoute', entityId: id, branchId: before.branchId, before: { name: before.name }, after: body });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'TransportRoute', entityId: id, branchId: before.branchId,
+      before: { name: before.name },
+      after: { name: body.name ?? before.name, ...(stops ? { stopCount: stops.length } : {}) },
+    });
   });
   res.json({ ok: true });
 });
@@ -491,9 +673,10 @@ facilitiesRouter.post('/hostel/allocations', async (req, res) => {
     if (room.allocations.some((a) => a.studentId === body.studentId)) return;
     if (room.allocations.length >= room.capacity) throw conflict(`Room ${room.block}-${room.number} is full.`);
     if ((room.type === 'BOYS' && student.gender === 'FEMALE') || (room.type === 'GIRLS' && student.gender === 'MALE')) throw badRequest(`Room ${room.block}-${room.number} is for ${room.type.toLowerCase()}.`);
+    const previous = await tx.hostelAllocation.findFirst({ where: { studentId: body.studentId, toDate: null } });
     await tx.hostelAllocation.updateMany({ where: { studentId: body.studentId, toDate: null }, data: { toDate: todayUtc() } });
-    await tx.hostelAllocation.create({ data: { organizationId: ctx.organizationId, roomId: room.id, studentId: body.studentId, fromDate: todayUtc() } });
-    await audit(tx, ctx, { action: 'CREATE', entity: 'HostelAllocation', entityId: body.studentId, branchId: room.branchId, after: { room: `${room.block}-${room.number}` } });
+    const allocation = await tx.hostelAllocation.create({ data: { organizationId: ctx.organizationId, roomId: room.id, studentId: body.studentId, fromDate: todayUtc() } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'HostelAllocation', entityId: allocation.id, branchId: room.branchId, before: { allocated: !!previous }, after: { allocated: true } });
   });
   res.status(201).json({ ok: true });
 });
@@ -507,7 +690,7 @@ facilitiesRouter.post('/hostel/residents/:studentId/vacate', async (req, res) =>
     if (!a) throw notFound('Resident');
     assertManage(ctx, 'hostel.manage', a.room.branchId);
     await tx.hostelAllocation.update({ where: { id: a.id }, data: { toDate: todayUtc() } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'HostelAllocation', entityId: a.id, branchId: a.room.branchId, after: { vacated: true } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'HostelAllocation', entityId: a.id, branchId: a.room.branchId, before: { vacated: false }, after: { vacated: true } });
   });
   res.json({ ok: true });
 });
@@ -522,6 +705,7 @@ facilitiesRouter.post('/hostel/outpasses', async (req, res) => {
     if (!a) throw badRequest('This student does not live in the hostel.');
     assertManage(ctx, 'hostel.manage', a.room.branchId);
     const o = await tx.outpass.create({ data: { organizationId: ctx.organizationId, branchId: a.room.branchId, studentId: body.studentId, fromDate: body.fromDate, toDate: body.toDate, reason: body.reason, status: 'PENDING' } });
+    await audit(tx, ctx, { action: 'CREATE', entity: 'Outpass', entityId: o.id, branchId: o.branchId, after: { status: o.status } });
     return { id: o.id, studentId: o.studentId, fromDate: toDateString(o.fromDate), toDate: toDateString(o.toDate), reason: o.reason, status: o.status, createdAt: toDateString(o.createdAt) };
   });
   res.status(201).json(out);

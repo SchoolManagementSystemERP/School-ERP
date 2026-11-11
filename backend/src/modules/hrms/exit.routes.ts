@@ -120,7 +120,11 @@ exitRouter.patch('/separations/:id', async (req, res) => {
       data = { status: 'WITHDRAWN' };
     }
     const updated = await tx.separation.update({ where: { id }, data });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Separation', entityId: id, branchId: s.branchId, before: { status: s.status }, after: { ...body, lastWorkingDay: toDateString(body.lastWorkingDay ?? null) } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'Separation', entityId: id, branchId: s.branchId,
+      before: { status: s.status },
+      after: { action: body.action, status: updated.status, lastWorkingDay: toDateString(updated.lastWorkingDay), remarkProvided: !!body.remark },
+    });
     return sepOut(updated);
   });
   res.json(out);
@@ -140,6 +144,7 @@ exitRouter.put('/separations/:id/exit-interview', async (req, res) => {
     await assertHrOrSelf(tx, ctx, s);
     if (!['ACCEPTED', 'CLEARANCE'].includes(s.status)) throw conflict('The exit interview happens after the exit is accepted.');
     await tx.separation.update({ where: { id }, data: { exitInterview: JSON.stringify({ ...body, recordedAt: new Date().toISOString() }) } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'ExitInterview', entityId: id, branchId: s.branchId, after: { recorded: true } });
   });
   res.json({ ok: true });
 });
@@ -154,6 +159,7 @@ exitRouter.put('/separations/:id/handover', async (req, res) => {
     assertHr(ctx, s.branchId);
     if (!['ACCEPTED', 'CLEARANCE'].includes(s.status)) throw conflict(`This exit is ${s.status.toLowerCase()}.`);
     await tx.separation.update({ where: { id }, data: { handover: JSON.stringify(body.items) } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'ExitHandover', entityId: id, branchId: s.branchId, after: { items: body.items.length, completed: body.items.filter((item) => item.done).length } });
   });
   res.json({ ok: true });
 });
@@ -234,7 +240,11 @@ exitRouter.post('/separations/:id/fnf', async (req, res) => {
     if (!['ACCEPTED', 'CLEARANCE'].includes(s.status)) throw conflict(`This exit is ${s.status.toLowerCase()} — accept it first.`);
     const fnf = await computeFnf(tx, ctx, s, body);
     await tx.separation.update({ where: { id }, data: { fnf: JSON.stringify(fnf), status: 'CLEARANCE' } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'FullAndFinal', entityId: id, branchId: s.branchId, after: { net: fnf.net, ...body } });
+    await audit(tx, ctx, {
+      action: 'UPDATE', entity: 'FullAndFinal', entityId: id, branchId: s.branchId,
+      before: { status: s.status },
+      after: { status: 'CLEARANCE', calculated: true, earningsLineCount: fnf.earnings.length, deductionLineCount: fnf.deductions.length },
+    });
     return fnf;
   });
   res.json(out);
@@ -260,14 +270,22 @@ exitRouter.post('/separations/:id/settle', async (req, res) => {
     const expense = fnf.net > 0
       ? await tx.expense.create({ data: { organizationId: ctx.organizationId, branchId: s.branchId, date: todayUtc(), category: 'Full & Final Settlement', description: `F&F — ${staff.name} (${staff.employeeCode}), last day ${toDateString(s.lastWorkingDay)}`, amount: fnf.net, paidTo: staff.name, method: 'BANK_TRANSFER', createdById: ctx.userId } })
       : null;
-    await tx.expenseClaim.updateMany({ where: { id: { in: fnf.claimIds ?? [] }, status: 'APPROVED' }, data: { status: 'PAID', paidMonth: 'FNF' } });
+    if (expense) {
+      await audit(tx, ctx, { action: 'CREATE', entity: 'Expense', entityId: expense.id, branchId: s.branchId, after: { category: 'Full & Final Settlement', paymentMethod: 'BANK_TRANSFER', settlementExpense: true } });
+    }
+    const paidClaims = await tx.expenseClaim.updateMany({ where: { id: { in: fnf.claimIds ?? [] }, status: 'APPROVED' }, data: { status: 'PAID', paidMonth: 'FNF' } });
+    if (paidClaims.count) {
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'ExpenseClaim', branchId: s.branchId, after: { count: paidClaims.count, paidMonth: 'FNF', status: 'PAID' } });
+    }
     await tx.staff.update({ where: { id: staff.id }, data: { status: 'RESIGNED' } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Staff', entityId: staff.id, branchId: s.branchId, before: { status: staff.status }, after: { status: 'RESIGNED' } });
     if (staff.userId) {
       await tx.user.update({ where: { id: staff.userId }, data: { isActive: false } });
+      await audit(tx, ctx, { action: 'UPDATE', entity: 'User', entityId: staff.userId, branchId: s.branchId, after: { isActive: false, accessRevoked: true } });
       await tx.refreshToken.updateMany({ where: { userId: staff.userId, revokedAt: null }, data: { revokedAt: new Date() } });
     }
     const updated = await tx.separation.update({ where: { id }, data: { status: 'SETTLED', settledAt: new Date(), expenseId: expense?.id ?? null } });
-    await audit(tx, ctx, { action: 'UPDATE', entity: 'Separation', entityId: id, branchId: s.branchId, before: { status: s.status }, after: { status: 'SETTLED', net: fnf.net, expenseId: expense?.id ?? null } });
+    await audit(tx, ctx, { action: 'UPDATE', entity: 'Separation', entityId: id, branchId: s.branchId, before: { status: s.status }, after: { status: 'SETTLED', settlementRecorded: true, expenseId: expense?.id ?? null } });
     return sepOut(updated);
   });
   res.json(out);
